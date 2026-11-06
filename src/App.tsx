@@ -2,18 +2,20 @@ import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { 
   Radar, 
-  Zap, 
+  Search,
   AlertCircle,
   ShoppingBag,
-  Calendar,
+  ShieldCheck,
   MessageSquare,
-  Layers,
-  Sparkles
+  Bell,
+  Sparkles,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
 import { collection, onSnapshot, query } from 'firebase/firestore';
 import { auth, googleProvider, db, syncUserProfile, testConnection, saveAnalyzedOfferToFirestore, saveChatMessageToFirestore } from './lib/firebase';
-import { Navbar } from './components/Navbar';
+import { Navbar, ActiveWorkspaceTab } from './components/Navbar';
 import { OfferInputForm } from './components/OfferInputForm';
 import { PriceGauge } from './components/PriceGauge';
 import { MarketSearchResults } from './components/MarketSearchResults';
@@ -27,7 +29,7 @@ import { ShoppingAdvisorCard } from './components/ShoppingAdvisorCard';
 import { ExpressDealFinder } from './components/ExpressDealFinder';
 import { RechartsPriceTrend } from './components/RechartsPriceTrend';
 import { PriceAlertTracker } from './components/PriceAlertTracker';
-import { MobileTabBar, ActiveTab } from './components/MobileTabBar';
+import { MobileTabBar } from './components/MobileTabBar';
 import { 
   OfferInput, 
   DeepAnalysisResult, 
@@ -39,15 +41,17 @@ import {
   ShoppingAdvisorMessage,
   InstantDealResult
 } from './types';
+import { SearchMode } from './types/dealz';
 
 const LOCAL_STORAGE_KEY = 'dealradar_history_v1';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [lang, setLang] = useState<'pl' | 'en'>('pl');
-  const [activeTab, setActiveTab] = useState<ActiveTab>('radar');
+  const [activeTab, setActiveTab] = useState<ActiveWorkspaceTab>('search');
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [showDetailedForm, setShowDetailedForm] = useState(false);
 
   // Form input state
   const todayStr = new Date().toISOString().split('T')[0];
@@ -72,7 +76,6 @@ export default function App() {
   const [priceComparison, setPriceComparison] = useState<PriceComparisonData | null>(null);
   const [freshnessResult, setFreshnessResult] = useState<DateFreshnessResult | null>(null);
   const [advisorMessages, setAdvisorMessages] = useState<ShoppingAdvisorMessage[]>([]);
-  const [inputMode, setInputMode] = useState<'express' | 'full'>('express');
   const [instantDealResult, setInstantDealResult] = useState<InstantDealResult | null>(null);
   const [isLoadingInstantDeals, setIsLoadingInstantDeals] = useState(false);
 
@@ -236,7 +239,7 @@ export default function App() {
       imageBase64: null,
       imageMimeType: 'image/jpeg',
     });
-    setActiveTab('radar');
+    setActiveTab('forensics');
   };
 
   const handleLoginWithGoogle = async () => {
@@ -376,7 +379,7 @@ export default function App() {
   };
 
   // 4b. INSTANT FIND DEALS
-  const handleInstantFindDeals = async (searchTerm: string, targetPrice?: string, imageBase64?: string | null) => {
+  const handleInstantFindDeals = async (searchTerm: string, targetPrice?: string, imageBase64?: string | null, mode?: SearchMode) => {
     try {
       setErrorMessage(null);
       setIsLoadingInstantDeals(true);
@@ -388,6 +391,7 @@ export default function App() {
           query: searchTerm,
           price: targetPrice,
           imageBase64,
+          mode: mode || 'exact',
         }),
       });
 
@@ -412,7 +416,7 @@ export default function App() {
             particleCount: 90,
             spread: 75,
             origin: { y: 0.6 },
-            colors: ['#10b981', '#06b6d4', '#f59e0b'],
+            colors: ['#f59e0b', '#fbbf24', '#38bdf8'],
           });
         } catch (e) {
           // ignore
@@ -530,6 +534,7 @@ export default function App() {
 
       const result: DeepAnalysisResult = json.data;
       setDeepAnalysis(result);
+      setActiveTab('forensics');
 
       if (result.dealScore.score >= 80) {
         try {
@@ -537,7 +542,7 @@ export default function App() {
             particleCount: 80,
             spread: 70,
             origin: { y: 0.6 },
-            colors: ['#10b981', '#06b6d4', '#3b82f6', '#f59e0b'],
+            colors: ['#f59e0b', '#fbbf24', '#38bdf8'],
           });
         } catch (e) {
           // ignore
@@ -573,31 +578,18 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500/30 selection:text-emerald-200 pb-20 md:pb-8 relative overflow-x-hidden">
-      {/* Background Ambient Glows */}
-      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] bg-gradient-to-b from-cyan-500/10 via-emerald-500/5 to-transparent blur-3xl pointer-events-none -z-10" />
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200 pb-20 md:pb-8 relative overflow-x-hidden">
+      {/* Background Subtle Ambient Lighting */}
+      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[350px] bg-gradient-to-b from-amber-500/5 via-slate-900/10 to-transparent blur-3xl pointer-events-none -z-10" />
 
-      {/* Navigation Bar */}
+      {/* Unified Navigation Bar */}
       <Navbar
         onOpenHistory={() => setIsHistoryOpen(true)}
         historyCount={history.length}
         lang={lang}
         onToggleLang={() => setLang(lang === 'pl' ? 'en' : 'pl')}
-        activeSegment={inputMode === 'express' ? 'express' : activeTab}
-        onSelectSegment={(seg) => {
-          if (seg === 'express') {
-            setInputMode('express');
-          } else if (seg === 'full') {
-            setInputMode('full');
-            setActiveTab('radar');
-          } else if (seg === 'compare') {
-            setInputMode('full');
-            setActiveTab('compare');
-          } else if (seg === 'advisor') {
-            setInputMode('full');
-            setActiveTab('advisor');
-          }
-        }}
+        activeTab={activeTab}
+        onSelectTab={(tab) => setActiveTab(tab)}
         currentUser={currentUser}
         onLoginWithGoogle={handleLoginWithGoogle}
         onLogout={handleLogout}
@@ -605,28 +597,27 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8">
-        {/* Hero Section */}
+        {/* Executive Hero Section */}
         <div className="text-center max-w-3xl mx-auto space-y-3 pt-2">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/80 border border-slate-800 text-emerald-400 text-xs font-semibold backdrop-blur-md shadow-inner">
-            <Radar className="w-3.5 h-3.5 animate-spin text-emerald-400" style={{ animationDuration: '6s' }} />
-            <span>DealRadar AI • Ultra HD Glassmorphic Valuation Suite</span>
-          </div>
-
           <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
-            Prawidłowa Wycena i{' '}
-            <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
-              Porównywarka Sklepów
+            Wyszukiwarka i Wyceniarka Zakupowa{' '}
+            <span className="text-amber-400">
+              DealZ
             </span>
           </h1>
 
-          <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl mx-auto">
-            Wklej link z Allegro, OLX lub Ceneo. AI natychmiast zweryfikuje cenę rynkową, wyliczy opłacalność oraz wykryje ukryte ryzyka.
-          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-slate-400 max-w-2xl mx-auto">
+            <span>Analiza ofert na żywo</span>
+            <span aria-hidden="true">·</span>
+            <span>Porównywarka cen w sklepach</span>
+            <span aria-hidden="true">·</span>
+            <span>Weryfikacja autentyczności i zamienniki</span>
+          </div>
         </div>
 
         {/* Global Error Banner */}
         {errorMessage && (
-          <div className="p-4 rounded-2xl bg-rose-950/80 border border-rose-800 text-rose-200 text-xs sm:text-sm flex items-center justify-between gap-3 shadow-xl backdrop-blur-xl">
+          <div className="p-4 rounded-2xl bg-rose-950/90 border border-rose-800 text-rose-200 text-xs sm:text-sm flex items-center justify-between gap-3 shadow-xl backdrop-blur-xl">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
               <span>{errorMessage}</span>
@@ -640,75 +631,118 @@ export default function App() {
           </div>
         )}
 
-        {/* Mode Switcher: Express vs Detailed */}
-        <div className="flex items-center justify-center">
-          <div className="inline-flex p-1 bg-slate-900/80 border border-slate-800/80 rounded-2xl shadow-xl backdrop-blur-xl gap-1">
+        {/* Desktop Workspace Segment Control Bar */}
+        <div className="hidden md:flex items-center justify-center pt-2">
+          <div className="flex items-center p-1 rounded-2xl bg-slate-900 border border-slate-800/80 backdrop-blur-xl shadow-xl gap-1">
             <button
               type="button"
-              onClick={() => setInputMode('express')}
-              className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-2 ${
-                inputMode === 'express'
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-600/30'
+              onClick={() => setActiveTab('search')}
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+                activeTab === 'search'
+                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Zap className="w-3.5 h-3.5 text-amber-300" />
-              <span>Szybki Łowca Ofert (Kup Teraz)</span>
+              <Search className="w-4 h-4" />
+              <span>Wyszukiwarka Ofert</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setInputMode('full')}
-              className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-2 ${
-                inputMode === 'full'
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-600/30'
+              onClick={() => setActiveTab('compare')}
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+                activeTab === 'compare'
+                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Pełna Ekspertyza & Wyceniarka</span>
+              <ShoppingBag className="w-4 h-4" />
+              <span>Porównywarka Sklepów</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('forensics')}
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+                activeTab === 'forensics'
+                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>Analiza & Forensics</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('advisor')}
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+                activeTab === 'advisor'
+                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Doradca AI</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('alert')}
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+                activeTab === 'alert'
+                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Bell className="w-4 h-4" />
+              <span>Alert Cenowy</span>
             </button>
           </div>
         </div>
 
-        {/* Express Deal Search Engine */}
-        {inputMode === 'express' && (
-          <div className="space-y-4">
+        {/* WORKSPACE VIEW 1: WYSZUKIWARKA OFERT */}
+        {activeTab === 'search' && (
+          <div className="space-y-6">
             <ExpressDealFinder
               onSearch={handleInstantFindDeals}
               isLoading={isLoadingInstantDeals}
               result={instantDealResult}
             />
+
+            {/* Toggle for Deep Inspection / Custom Form */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDetailedForm(!showDetailedForm)}
+                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-slate-300 flex items-center justify-between transition shadow-md"
+              >
+                <span>Formularz Głębocizny i Wyceniarki Aukcji (Wklej własny opis / stan / link)</span>
+                {showDetailedForm ? <ChevronUp className="w-4 h-4 text-amber-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+
+              {showDetailedForm && (
+                <div className="mt-4">
+                  <OfferInputForm
+                    input={input}
+                    setInput={setInput}
+                    onStartDeepAnalysis={handleStartDeepAnalysis}
+                    onStartQuickScan={handleQuickScan}
+                    onStartQuickCompare={handleStartQuickCompare}
+                    isLoadingDeep={isLoadingDeep}
+                    isLoadingQuick={isLoadingQuick}
+                    isLoadingComparison={isLoadingComparison}
+                    lang={lang}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Full Offer Input Form */}
-        {inputMode === 'full' && (
-          <OfferInputForm
-            input={input}
-            setInput={setInput}
-            onStartDeepAnalysis={handleStartDeepAnalysis}
-            onStartQuickScan={handleQuickScan}
-            onStartQuickCompare={handleStartQuickCompare}
-            isLoadingDeep={isLoadingDeep}
-            isLoadingQuick={isLoadingQuick}
-            isLoadingComparison={isLoadingComparison}
-            lang={lang}
-          />
-        )}
-
-        {/* Fast Low-Latency Scan Card */}
-        {quickScan && (
-          <QuickScanCard
-            result={quickScan}
-            onDismiss={() => setQuickScan(null)}
-            lang={lang}
-          />
-        )}
-
-        {/* Standalone Quick Compare View */}
-        {activeTab === 'compare' && !deepAnalysis && (
-          <div className="pt-2">
+        {/* WORKSPACE VIEW 2: PORÓWNYWARKA SKLEPÓW */}
+        {activeTab === 'compare' && (
+          <div className="space-y-6">
             <PriceComparisonView
               data={priceComparison}
               isLoading={isLoadingComparison}
@@ -718,71 +752,11 @@ export default function App() {
           </div>
         )}
 
-        {/* Desktop View Segment Tabs */}
-        {deepAnalysis && (
-          <div className="hidden md:flex items-center justify-center pt-2">
-            <div className="flex items-center p-1 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-xl shadow-xl gap-1">
-              <button
-                type="button"
-                onClick={() => setActiveTab('radar')}
-                className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
-                  activeTab === 'radar'
-                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Radar className="w-4 h-4" />
-                <span>Radar Wyceny & Forensics</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('compare')}
-                className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
-                  activeTab === 'compare'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <ShoppingBag className="w-4 h-4" />
-                <span>Porównywarka Sklepów</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('calendar')}
-                className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
-                  activeTab === 'calendar'
-                    ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Calendar className="w-4 h-4" />
-                <span>Kalendarz Świeżości</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('advisor')}
-                className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
-                  activeTab === 'advisor'
-                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <MessageSquare className="w-4 h-4" />
-                <span>Doradca Zakupowy AI</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Detailed Results Section */}
-        {deepAnalysis && (
-          <div id="analysis-results-section" className="space-y-6 pt-2">
-            {/* View 1: Radar & Safety */}
-            {activeTab === 'radar' && (
-              <div className="space-y-6">
+        {/* WORKSPACE VIEW 3: ANALIZA & FORENSICS */}
+        {activeTab === 'forensics' && (
+          <div id="analysis-results-section" className="space-y-6">
+            {deepAnalysis ? (
+              <>
                 {/* Primary Price Gauge & Score Card */}
                 <PriceGauge data={deepAnalysis} lang={lang} />
 
@@ -819,50 +793,66 @@ export default function App() {
                   productName={deepAnalysis.product.identifiedName}
                   originalImage={input.imageBase64}
                 />
-
-                {/* Web Notification Price Drop Alert System with Firestore sync */}
-                <PriceAlertTracker
-                  currentProductTitle={deepAnalysis.product.identifiedName}
-                  currentProductPrice={deepAnalysis.pricing.offeredPrice}
-                  currentProductUrl={input.url}
-                  userId={currentUser?.uid}
-                />
+              </>
+            ) : (
+              <div className="py-12 px-4 text-center bg-slate-900/90 border border-slate-800 rounded-2xl space-y-4">
+                <ShieldCheck className="w-12 h-12 text-slate-600 mx-auto" />
+                <h3 className="text-lg font-bold text-white">Brak aktywnej głębokiej analizy</h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Wpisz przedmiot lub link w zakładce Wyszukiwarka Ofert i kliknij "Uruchom Radar i Wycenę AI", aby uzyskać kompletny raport opłacalności.
+                </p>
+                <button
+                  onClick={() => setActiveTab('search')}
+                  className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs transition shadow-md"
+                >
+                  Przejdź do Wyszukiwarki
+                </button>
               </div>
             )}
-
-            {/* View 2: Multi-Store Price Comparison */}
-            {activeTab === 'compare' && (
-              <PriceComparisonView
-                data={priceComparison}
-                isLoading={isLoadingComparison}
-                onRefreshComparison={() => fetchPriceComparison(deepAnalysis.product.identifiedName, String(deepAnalysis.pricing.offeredPrice))}
-                productName={deepAnalysis.product.identifiedName}
-              />
-            )}
-
-            {/* View 3: Calendar & Freshness Verification */}
-            {activeTab === 'calendar' && (
-              <OfferCalendarCard
-                currentListingDate={input.listingDate || todayStr}
-                onDateChange={(d) => setInput((prev) => ({ ...prev, listingDate: d }))}
-                freshnessResult={freshnessResult}
-                onCheckFreshness={checkDateFreshness}
-                isLoadingFreshness={isLoadingFreshness}
-                productTitle={deepAnalysis.product.identifiedName}
-              />
-            )}
-
-            {/* View 4: AI Shopping Advisor Chat */}
-            {activeTab === 'advisor' && (
-              <ShoppingAdvisorCard
-                productTitle={deepAnalysis.product.identifiedName}
-                currentPrice={input.price}
-                messages={advisorMessages}
-                onSendMessage={handleSendAdvisorMessage}
-                isLoading={isLoadingAdvisor}
-              />
-            )}
           </div>
+        )}
+
+        {/* WORKSPACE VIEW 4: DORADCA AI */}
+        {activeTab === 'advisor' && (
+          <div className="space-y-6">
+            <ShoppingAdvisorCard
+              productTitle={deepAnalysis?.product?.identifiedName || input.title || 'Przedmiot'}
+              currentPrice={input.price}
+              messages={advisorMessages}
+              onSendMessage={handleSendAdvisorMessage}
+              isLoading={isLoadingAdvisor}
+            />
+          </div>
+        )}
+
+        {/* WORKSPACE VIEW 5: ALERT CENOWY & FRESHNESS */}
+        {activeTab === 'alert' && (
+          <div className="space-y-6">
+            <PriceAlertTracker
+              currentProductTitle={deepAnalysis?.product?.identifiedName || input.title || 'Przedmiot'}
+              currentProductPrice={deepAnalysis?.pricing?.offeredPrice || Number(input.price) || 0}
+              currentProductUrl={input.url}
+              userId={currentUser?.uid}
+            />
+
+            <OfferCalendarCard
+              currentListingDate={input.listingDate || todayStr}
+              onDateChange={(d) => setInput((prev) => ({ ...prev, listingDate: d }))}
+              freshnessResult={freshnessResult}
+              onCheckFreshness={checkDateFreshness}
+              isLoadingFreshness={isLoadingFreshness}
+              productTitle={deepAnalysis?.product?.identifiedName || input.title || 'Przedmiot'}
+            />
+          </div>
+        )}
+
+        {/* Fast Low-Latency Scan Card */}
+        {quickScan && (
+          <QuickScanCard
+            result={quickScan}
+            onDismiss={() => setQuickScan(null)}
+            lang={lang}
+          />
         )}
       </main>
 
@@ -877,7 +867,7 @@ export default function App() {
         lang={lang}
       />
 
-      {/* Mobile Thumb-Zone Bottom Tab Bar */}
+      {/* Mobile Bottom Navigation Bar */}
       <MobileTabBar
         activeTab={activeTab}
         onTabChange={(t) => setActiveTab(t)}
@@ -887,18 +877,19 @@ export default function App() {
       />
 
       {/* Footer */}
-      <footer className="mt-16 border-t border-slate-900/80 bg-slate-950/90 backdrop-blur-xl py-6 text-center text-xs text-slate-500">
+      <footer className="mt-16 border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center space-x-2">
-            <Radar className="w-4 h-4 text-emerald-400" />
-            <span className="font-semibold text-slate-400">DealRadar AI</span>
-            <span>• Ultra HD Glassmorphic Valuation Suite & Firestore DB</span>
+            <Radar className="w-4 h-4 text-amber-400" />
+            <span className="font-semibold text-slate-300">DealZ AI Engine</span>
+            <span>• Inteligentna Wyszukiwarka i Wyceniarka Zakupowa</span>
           </div>
           <div className="flex items-center space-x-4 text-[11px] text-slate-500">
-            <span>Powered by Gemini 4 Argon • Gemini 3.8 Flash • Firebase Firestore</span>
+            <span>Powered by Gemini 4 Argon · Gemini 3.8 Flash · Firestore DB</span>
           </div>
         </div>
       </footer>
     </div>
   );
 }
+

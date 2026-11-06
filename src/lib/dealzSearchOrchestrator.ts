@@ -1,18 +1,17 @@
 /**
- * DEALZ LIVE SEARCH ORCHESTRATOR — ITERATION 2
- * Fully repaired orchestrator:
- * - ZERO fake/placeholder offers injected when no products found.
- * - Marketplace search links returned strictly as MarketplaceSearchLink, NEVER masquerading as Offer objects.
- * - No blind attribution of first Google link to arbitrary items.
- * - Strict error handling without hallucinated fallbacks when Google Search is unavailable.
+ * DEALZ LIVE SEARCH ORCHESTRATOR — ITERATION 3 REFACTORED
+ * Multi-stage search orchestrator strictly enforcing:
+ * - ZERO dummy / fallback offer generation.
+ * - Accurate error status reporting when no external results are found or APIs fail.
+ * - Clean separation of marketplace search navigation links from concrete offer objects.
+ * - Full AbortSignal support for task cancellation.
  */
 
 import { GoogleGenAI } from '@google/genai';
 import {
   DealzRankingResult,
   MarketplaceSearchLink,
-  SearchQuery,
-  Offer
+  SearchMode,
 } from '../types/dealz.js';
 import {
   parseUserQuery,
@@ -55,22 +54,47 @@ export function buildMarketplaceSearchLinks(query: string): MarketplaceSearchLin
 export async function executeUniversalSearch(
   ai: GoogleGenAI,
   rawQuery: string,
-  targetPrice?: number | null
+  targetPrice?: number | null,
+  mode: SearchMode = 'exact',
+  signal?: AbortSignal
 ): Promise<DealzRankingResult> {
-  const parsedQuery = parseUserQuery(rawQuery);
+  const parsedQuery = parseUserQuery(rawQuery, mode);
   const searchLinks = buildMarketplaceSearchLinks(parsedQuery.rawQuery);
 
-  // Initialize Provider Registry
   const registry = new ProviderRegistry(ai);
 
-  // Execute providers
-  const { offers, diagnostics, errors, sourcesQueried, sourcesSucceeded, sourcesFailed } =
-    await registry.executeAll(parsedQuery);
+  // 1. Task Cancellation Check
+  if (signal?.aborted) {
+    const emptyRank = rankOffers(parsedQuery, [], searchLinks, 0);
+    emptyRank.isSearchCancelled = true;
+    emptyRank.searchStatus = 'cancelled';
+    emptyRank.aiInsight = {
+      summary: 'Wyszukiwanie zostało anulowane przez użytkownika.',
+      verdict: 'CZEKAJ',
+      verdictReason: 'Zadanie wyszukiwania zostało przerwane przed pobraniem kompletnych wyników.',
+      cautionNotes: ['Ponów wyszukiwanie, aby pobrać aktualne oferty.'],
+    };
+    return emptyRank;
+  }
 
-  // Rank offers (strictly partitioned: TotalCost known, Price only, Candidates)
+  // 2. Execute Providers (No dummy offer fallback allowed)
+  const { offers, diagnostics, errors, sourcesQueried, sourcesSucceeded, sourcesFailed } =
+    await registry.executeAll(parsedQuery, signal);
+
+  // 3. Rank Real Offers
   const ranking = rankOffers(parsedQuery, offers, searchLinks, offers.length);
 
-  // Attach diagnostic provenance
+  if (signal?.aborted) {
+    ranking.isSearchCancelled = true;
+    ranking.searchStatus = 'cancelled';
+  } else if (offers.length > 0) {
+    ranking.searchStatus = 'completed';
+  } else if (errors.length > 0) {
+    ranking.searchStatus = 'source_error';
+  } else {
+    ranking.searchStatus = 'no_results';
+  }
+
   ranking.provenance = {
     sourcesQueried,
     sourcesSucceeded,
@@ -81,8 +105,9 @@ export async function executeUniversalSearch(
 
   ranking.diagnostics.providers = diagnostics;
 
-  // AI Market Insight based strictly on factual observations
+  // 4. AI Market Insight based solely on factual findings (Zero hallucinated data)
   const obsCount = ranking.priceStats.observationsCount;
+
   if (obsCount > 0) {
     const med = ranking.priceStats.medianPrice;
     const min = ranking.priceStats.minPrice;
@@ -112,13 +137,15 @@ export async function executeUniversalSearch(
         'Zawsze weryfikuj stan techniczny, dowód zakupu oraz program ochrony kupujących przed finalizacją transakcji.',
         'W przypadku cen bez potwierdzonego kosztu dostawy ostateczny koszt zakupu może ulec zmianie.'
       ],
-      variantDifferences: [],
+      variantDifferences: ranking.alternatives && ranking.alternatives.length > 0
+        ? ranking.alternatives.map(a => `${a.brand} ${a.model}: ${a.reasoning}`)
+        : [],
     };
   } else if (errors.length > 0) {
     ranking.aiInsight = {
       summary: 'Błąd połączenia ze źródłami zewnętrznymi.',
       verdict: 'CZEKAJ',
-      verdictReason: `Nie udało się pobrać aktualnych cen: ${errors[0]}`,
+      verdictReason: `Nie udało się pobrać aktualnych cen z zewnętrznych źródeł: ${errors[0]}`,
       cautionNotes: ['Sprawdź połączenie sieciowe lub skorzystaj z bezpośrednich linków do wyszukiwarek poniżej.'],
     };
   } else {

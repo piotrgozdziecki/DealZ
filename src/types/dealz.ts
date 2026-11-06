@@ -18,15 +18,47 @@ export type ProductCondition =
   | 'open_box'
   | 'unknown';
 
+export type SearchMode = 'exact' | 'alternative';
+
+export interface ProductIdentityRationale {
+  identifierMatch: boolean;
+  brandMatch: boolean;
+  modelMatch: boolean;
+  parameterMatch: number; // 0 - 100
+  variantMatch: boolean;
+  conditionMatch: boolean;
+  score: number; // 0 - 100
+  reasons: string[];
+}
+
 export interface ProductIdentity {
   title: string;
   brand?: string | null;
   model?: string | null;
-  identifiers?: string[]; // EAN, GTIN, MPN, UPC
+  identifiers?: string[]; // EAN, GTIN, MPN, UPC, SKU, ASIN
   variant?: Record<string, string>; // e.g. { color: "Space Gray", storage: "256GB" }
   attributes?: Record<string, string | number | boolean>;
   identityConfidence?: number; // 0 - 100
   category?: string | null;
+}
+
+export interface OfferFreshness {
+  fetchedAt: string; // ISO 8601
+  priceCheckedAt: string;
+  availabilityCheckedAt: string;
+  variantCheckedAt: string;
+  urlCheckedAt: string;
+  freshnessGrade: 'fresh' | 'recent' | 'aging' | 'stale';
+  summaryLabel: string;
+}
+
+export interface DataQualityReport {
+  completenessScore: number; // 0 - 100
+  matchConfidence: number; // 0 - 100
+  freshnessGrade: 'fresh' | 'recent' | 'aging' | 'stale';
+  sourceAuthority: 'official_api' | 'authorized_feed' | 'grounded_web' | 'third_party';
+  verificationLevel: VerificationStatus;
+  explanation: string;
 }
 
 export interface Offer {
@@ -46,6 +78,8 @@ export interface Offer {
   isTotalCostKnown: boolean; // True ONLY if price and shippingCost are confirmed
   availability?: 'in_stock' | 'low_stock' | 'out_of_stock' | 'preorder' | 'unknown';
   shippingSpeed?: string | null;
+  returnPolicy?: string | null;
+  warrantyInfo?: string | null;
   offerUrl: string;
   isDirectListingUrl: boolean; // TRUE if points directly to specific item, FALSE if search/category
   imageUrl?: string | null;
@@ -55,6 +89,9 @@ export interface Offer {
   verificationEvidence?: string[];
   sourceReference?: string | null;
   dataCompleteness: number; // 0 - 100
+  freshness?: OfferFreshness;
+  qualityReport?: DataQualityReport;
+  matchRationale?: ProductIdentityRationale;
 }
 
 /**
@@ -70,18 +107,28 @@ export interface MarketplaceSearchLink {
 
 export interface SearchQuery {
   rawQuery: string;
+  searchMode?: SearchMode;
   extractedBrand?: string | null;
   extractedModel?: string | null;
   extractedIdentifiers?: string[];
   attributes?: Record<string, string>;
   conditionPreference?: ProductCondition | 'any';
   budgetMax?: number | null;
+  budgetMin?: number | null;
   location?: string | null;
   parsedIntent?: string;
+  queryLanguage?: string;
+  generatedQueryVariants?: {
+    exact?: string;
+    identifier?: string;
+    altSpelling?: string;
+    brandModel?: string;
+    techSpecs?: string;
+  };
   clarificationNeeded?: string | null;
 }
 
-export type ProviderHealthStatus = 'operational' | 'unconfigured' | 'error' | 'degraded';
+export type ProviderHealthStatus = 'operational' | 'unconfigured' | 'error' | 'degraded' | 'rate_limited';
 
 export interface ProviderHealth {
   status: ProviderHealthStatus;
@@ -89,6 +136,7 @@ export interface ProviderHealth {
   latencyMs?: number;
   lastError?: string;
   message?: string;
+  consecutiveFailures?: number;
 }
 
 export interface ProviderDiagnostics {
@@ -103,6 +151,7 @@ export interface ProviderDiagnostics {
   lastRunAt?: string;
   latencyMs?: number;
   lastError?: string;
+  circuitBreakerOpen?: boolean;
 }
 
 export interface ProviderSearchResult {
@@ -125,7 +174,7 @@ export interface ProductSearchProvider {
   name: string;
   isConfigured(): boolean;
   getDiagnostics(): ProviderDiagnostics;
-  search(query: SearchQuery): Promise<ProviderSearchResult>;
+  search(query: SearchQuery, signal?: AbortSignal): Promise<ProviderSearchResult>;
 }
 
 export interface PriceObservation {
@@ -142,8 +191,26 @@ export interface PriceObservation {
   evidenceReference: string;
 }
 
+export interface ProductAlternative {
+  id: string;
+  title: string;
+  brand: string;
+  model: string;
+  price: number | null;
+  currency: string;
+  url: string;
+  sourceName: string;
+  similarities: string[];
+  differences: string[];
+  keySpecs: Record<string, string>;
+  limitations: string[];
+  reasoning: string;
+  matchScore: number;
+}
+
 export interface DealzRankingResult {
   query: SearchQuery;
+  searchMode: SearchMode;
   recognizedProduct: ProductIdentity;
   totalOffersFound: number;
   verifiedOffersCount: number;
@@ -156,6 +223,9 @@ export interface DealzRankingResult {
   priceOnlyOffers: Offer[];       // Price known, shipping unknown
   candidateOffers: Offer[];       // Price unknown or requires verification
   marketplaceSearchLinks: MarketplaceSearchLink[];
+  alternatives?: ProductAlternative[];
+  isSearchCancelled?: boolean;
+  searchStatus?: 'completed' | 'no_results' | 'source_error' | 'cancelled';
   priceStats: {
     minPrice: number | null;
     medianPrice: number | null;
@@ -190,7 +260,7 @@ export interface DealzRankingResult {
 
 export interface SearchApiResponse<T = any> {
   success: boolean;
-  status: 'completed' | 'partial' | 'no_results' | 'source_unavailable' | 'error';
+  status: 'completed' | 'partial' | 'no_results' | 'source_unavailable' | 'error' | 'cancelled';
   data?: T;
   errors?: string[];
   sourcesQueried: string[];
@@ -198,3 +268,4 @@ export interface SearchApiResponse<T = any> {
   sourcesFailed: string[];
   fetchedAt: string;
 }
+

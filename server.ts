@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { executeUniversalSearch, buildMarketplaceSearchLinks } from './src/lib/dealzSearchOrchestrator.js';
 import { parseUserQuery, rankOffers } from './src/lib/dealzEngines.js';
 import { priceHistoryStore } from './src/lib/dealzPriceHistory.js';
@@ -44,7 +44,6 @@ export function isSafeExternalUrl(urlStr: string): boolean {
   }
 }
 
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -77,11 +76,20 @@ function cleanJsonString(str: string): string {
 
 // 1. FAST SCAN - Low-latency quick appraisal using gemini-3.1-flash-lite
 app.post('/api/quick-scan', async (req, res) => {
+  const fetchedAt = new Date().toISOString();
   try {
     const { title, price, currency = 'PLN', url, description } = req.body;
 
     if (!title && !url) {
-      return res.status(400).json({ error: 'Brak tytułu lub linku do oferty.' });
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        error: 'Brak tytułu lub linku do oferty.',
+        sourcesQueried: [],
+        sourcesSucceeded: [],
+        sourcesFailed: [],
+        fetchedAt
+      });
     }
 
     const prompt = `Jesteś błyskawicznym asystentem wyceny i łowcą okazji internetowych (Allegro, OLX, Ceneo, Amazon).
@@ -110,7 +118,17 @@ Zwróć odpowiedź w czystym formacie JSON:
     });
 
     const parsed = JSON.parse(cleanJsonString(response.text ?? '{}'));
-    return res.json({ success: true, data: parsed });
+    const hasData = Boolean(parsed && parsed.dealVerdict);
+
+    return res.json({
+      success: hasData,
+      status: hasData ? 'completed' : 'no_results',
+      data: parsed,
+      sourcesQueried: ['gemini-3.1-flash-lite'],
+      sourcesSucceeded: hasData ? ['gemini-3.1-flash-lite'] : [],
+      sourcesFailed: hasData ? [] : ['gemini-3.1-flash-lite'],
+      fetchedAt
+    });
   } catch (error: any) {
     console.error('Quick scan error:', error?.message);
     return res.status(503).json({
@@ -120,18 +138,27 @@ Zwróć odpowiedź w czystym formacie JSON:
       sourcesQueried: ['gemini-3.1-flash-lite'],
       sourcesSucceeded: [],
       sourcesFailed: ['gemini-3.1-flash-lite'],
-      fetchedAt: new Date().toISOString()
+      fetchedAt
     });
   }
 });
 
 // 2. LIVE SEARCH GROUNDING - Search real active marketplace listings with gemini-3.8-flash & googleSearch
 app.post('/api/search-market', async (req, res) => {
+  const fetchedAt = new Date().toISOString();
   try {
     const { productQuery, currentPrice, currency = 'PLN' } = req.body;
 
     if (!productQuery) {
-      return res.status(400).json({ error: 'Brak nazwy produktu do wyszukania.' });
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        error: 'Brak nazwy produktu do wyszukania.',
+        sourcesQueried: [],
+        sourcesSucceeded: [],
+        sourcesFailed: [],
+        fetchedAt
+      });
     }
 
     const searchQuery = `${productQuery} cena allegro olx ceneo pl`;
@@ -162,10 +189,36 @@ Zwróć odpowiedź w formacie Markdown z czytelnymi sekcjami i wypunktowaniami.`
         uri: c.web.uri,
       }));
 
+    const hasData = Boolean(response.text && response.text.trim().length > 30 && webSources.length > 0);
+    const sourcesQueried = ['Google Search Grounding', 'Allegro REST API', 'OLX Partner API', 'Ceneo Feed API', 'Amazon PA-API'];
+    const sourcesSucceeded = hasData ? ['Google Search Grounding'] : [];
+    const sourcesFailed = hasData
+      ? ['Allegro REST API (unconfigured)', 'OLX Partner API (unconfigured)', 'Ceneo Feed API (unconfigured)', 'Amazon PA-API (unconfigured)']
+      : ['Google Search Grounding', 'Allegro REST API (unconfigured)', 'OLX Partner API (unconfigured)', 'Ceneo Feed API (unconfigured)', 'Amazon PA-API (unconfigured)'];
+
+    if (!hasData) {
+      return res.status(200).json({
+        success: false, // Explicitly false when no actual data is retrieved!
+        status: 'no_results',
+        text: response.text || '',
+        sources: [],
+        errors: ['Nie odnaleziono aktualnych ofert rynkowych dla wybranego zapytania.'],
+        sourcesQueried,
+        sourcesSucceeded: [],
+        sourcesFailed,
+        fetchedAt,
+      });
+    }
+
     return res.json({
-      success: true,
+      success: true, // Only true when actual data is retrieved
+      status: 'completed',
       text: response.text,
       sources: webSources,
+      sourcesQueried,
+      sourcesSucceeded,
+      sourcesFailed,
+      fetchedAt,
     });
   } catch (error: any) {
     console.error('Market search error:', error?.message);
@@ -173,16 +226,18 @@ Zwróć odpowiedź w formacie Markdown z czytelnymi sekcjami i wypunktowaniami.`
       success: false,
       status: 'source_unavailable',
       error: 'Wyszukiwanie rynkowe na żywo jest chwilowo niedostępne: ' + (error?.message || 'Brak odpowiedzi wyszukiwarki'),
-      sourcesQueried: ['Google Search Grounding'],
+      errors: [error?.message || 'Brak odpowiedzi wyszukiwarki'],
+      sourcesQueried: ['Google Search Grounding', 'Allegro REST API', 'OLX Partner API', 'Ceneo Feed API', 'Amazon PA-API'],
       sourcesSucceeded: [],
       sourcesFailed: ['Google Search Grounding'],
-      fetchedAt: new Date().toISOString()
+      fetchedAt,
     });
   }
 });
 
 // 3. DEEP VALUATION & IMAGE UNDERSTANDING - gemini-4-argon with ThinkingLevel.HIGH
 app.post('/api/deep-analysis', async (req, res) => {
+  const fetchedAt = new Date().toISOString();
   try {
     const {
       title,
@@ -200,9 +255,7 @@ app.post('/api/deep-analysis', async (req, res) => {
 
     const parts: any[] = [];
 
-    // If user uploaded an image / screenshot of the offer
     if (imageBase64) {
-      // Remove data:image/...;base64, prefix if present
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
       parts.push({
         inlineData: {
@@ -286,7 +339,6 @@ Zwróć odpowiedź w czystym formacie JSON:
 
     let response;
     try {
-      // Primary model: gemini-4-argon with ThinkingLevel.HIGH (as requested by user feature)
       response = await ai.models.generateContent({
         model: 'gemini-4-argon',
         contents: parts,
@@ -299,7 +351,6 @@ Zwróć odpowiedź w czystym formacie JSON:
       });
     } catch (argonError: any) {
       console.warn('gemini-4-argon call failed, falling back to gemini-3.8-flash:', argonError?.message);
-      // Fallback to gemini-3.8-flash with JSON mode if argon requires tier change
       response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: parts,
@@ -310,17 +361,27 @@ Zwróć odpowiedź w czystym formacie JSON:
     }
 
     const parsed = JSON.parse(cleanJsonString(response.text ?? '{}'));
-    return res.json({ success: true, data: parsed });
+    const hasData = Boolean(parsed && parsed.product?.identifiedName);
+
+    return res.json({
+      success: hasData,
+      status: hasData ? 'completed' : 'no_results',
+      data: parsed,
+      sourcesQueried: ['gemini-4-argon', 'Google Search Grounding'],
+      sourcesSucceeded: hasData ? ['gemini-4-argon'] : [],
+      sourcesFailed: hasData ? [] : ['gemini-4-argon'],
+      fetchedAt
+    });
   } catch (error: any) {
     console.error('Deep analysis error:', error?.message);
     return res.status(500).json({
       success: false,
       status: 'error',
       error: 'Nie udało się przeprowadzić głębokiej wyceny oferty: ' + (error?.message || 'Brak odpowiedzi modelu'),
-      sourcesQueried: ['gemini-2.5-pro'],
+      sourcesQueried: ['gemini-4-argon', 'Google Search Grounding'],
       sourcesSucceeded: [],
-      sourcesFailed: ['gemini-2.5-pro'],
-      fetchedAt: new Date().toISOString()
+      sourcesFailed: ['gemini-4-argon'],
+      fetchedAt
     });
   }
 });
@@ -334,7 +395,6 @@ app.post('/api/generate-audio-summary', async (req, res) => {
       return res.status(400).json({ error: 'Brak tekstu skryptu do wygenerowania mowy.' });
     }
 
-    // gemini-3.8-flash-tts as explicitly required
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash-tts',
       contents: [
@@ -354,7 +414,6 @@ app.post('/api/generate-audio-summary', async (req, res) => {
         responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
-            // Options: 'Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'
             prebuiltVoiceConfig: { voiceName },
           },
         },
@@ -380,7 +439,7 @@ app.post('/api/generate-audio-summary', async (req, res) => {
   }
 });
 
-// 5. DUAL-SPEAKER PODCAST AUDIO (Host & Analyst) using gemini-3.8-flash-tts multi-speaker
+// 5. DUAL-SPEAKER PODCAST AUDIO
 app.post('/api/generate-podcast-audio', async (req, res) => {
   try {
     const { productTitle, verdict, savings, advice } = req.body;
@@ -467,10 +526,8 @@ function buildMarketUrl(platform: string, query: string): string {
   const dashEnc = encodeURIComponent(query.trim()).replace(/%20/g, '-');
   switch (platform.toLowerCase()) {
     case 'allegro':
-      // order=p sorts by price ascending, showing the cheapest active real offers right now
       return `https://allegro.pl/listing?string=${enc}&order=p`;
     case 'olx':
-      // sorts by price ascending with active OLX delivery filter
       return `https://www.olx.pl/oferty/q-${dashEnc}/?search%5Border%5D=filter_float_price%3Aasc`;
     case 'ceneo':
       return `https://www.ceneo.pl/;szukaj-${enc}`;
@@ -490,12 +547,11 @@ function extractProductKeywords(inputStr: string): string {
     try {
       const parsedUrl = new URL(clean);
       const pathname = decodeURIComponent(parsedUrl.pathname);
-      // Strip common Polish marketplace route prefixes
       const slug = pathname
         .replace(/^\/(d\/oferta|oferta|i|p|produkt|kategoria)\//i, '')
         .replace(/\.html?$/i, '')
-        .replace(/-CID[0-9]+-[A-Za-z0-9]+$/i, '') // OLX hash suffix
-        .replace(/-[0-9]{8,16}$/, '') // Allegro numeric item ID suffix
+        .replace(/-CID[0-9]+-[A-Za-z0-9]+$/i, '')
+        .replace(/-[0-9]{8,16}$/, '')
         .replace(/[-_]+/g, ' ')
         .replace(/\b(kup teraz|bcm|nowy|uzywany|gwarancja|faktura|stan|idealny)\b/gi, '')
         .trim();
@@ -507,32 +563,6 @@ function extractProductKeywords(inputStr: string): string {
     }
   }
   return clean.replace(/https?:\/\/[^\s]+/g, '').trim() || clean;
-}
-
-// Aggressive filter to strip common accessory/junk words to focus on the core product
-function refineSearchKeywords(query: string): string {
-  if (!query) return '';
-  let q = query.toLowerCase();
-  // Negative filters: words that often indicate non-core products or distractions
-  const junkWords = [
-    'etui', 'case', 'pokrowiec', 'szkło', 'folia', 'pudełko', 'box', 'karton', 'części', 'część',
-    'rozbity', 'uszkodzony', 'zepsuty', 'blokada', 'icloud', 'google bypass', 'akcesoria', 'zestaw akcesoriów',
-    'kabel', 'ładowarka', 'instrukcja', 'naklejka', 'zamiennik', 'dummy', 'atrapa'
-  ];
-  
-  // Only remove if they are not the primary subject (heuristic)
-  let words = q.split(/\s+/);
-  if (words.length > 2) {
-    words = words.filter(w => !junkWords.includes(w.replace(/[^a-z0-9]/g, '')));
-  }
-  
-  // Strip misleading technical performance marketing buzzwords
-  const buzzwords = [
-    '600w', '35kpa', '25000pa', '30000pa', '40000pa', 'super mocny', 'mega ssanie', 'hiper moc', 'mocny filtr'
-  ];
-  words = words.filter(w => !buzzwords.includes(w));
-  
-  return words.join(' ').trim() || q;
 }
 
 // Price history resolution via persistent disk store
@@ -547,13 +577,21 @@ function getGenuinePriceHistory(productKey: string) {
   };
 }
 
-
 // 6. PRICE COMPARATOR (Allegro, Ceneo, Amazon PL, OLX) with Google Search Grounding
 app.post('/api/compare-prices', async (req, res) => {
+  const fetchedAt = new Date().toISOString();
   const { productName, targetPrice } = req.body || {};
   try {
     if (!productName) {
-      return res.status(400).json({ error: 'Brak nazwy produktu do porównania cen.' });
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        error: 'Brak nazwy produktu do porównania cen.',
+        sourcesQueried: [],
+        sourcesSucceeded: [],
+        sourcesFailed: [],
+        fetchedAt
+      });
     }
 
     const cleanName = extractProductKeywords(productName);
@@ -660,7 +698,6 @@ Zwróć odpowiedź w czystym formacie JSON:
 
     const parsed = JSON.parse(cleanJsonString(response.text ?? '{}'));
 
-    // Extract grounding URLs and map to real sources
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
     const webSources = groundingChunks
       .filter((c: any) => c.web?.uri)
@@ -669,13 +706,10 @@ Zwróć odpowiedź w czystym formacie JSON:
         uri: c.web.uri,
       }));
 
-    // Clean and validate store URLs to ensure 100% working, real-time links
     if (parsed.stores && Array.isArray(parsed.stores)) {
       parsed.stores = parsed.stores.map((store: any) => {
         const plat = store.platform || 'Allegro';
-        // If Gemini left an ellipsis, invalid URL, or empty link, replace with verified live market URL
         if (!store.url || store.url.includes('...') || store.url.includes('example.com') || !store.url.startsWith('http')) {
-          // Check if there is a matching real URL in grounding chunks
           const matchingChunk = webSources.find((s: any) => s.uri.toLowerCase().includes(plat.toLowerCase().replace('.pl', '')));
           store.url = matchingChunk ? matchingChunk.uri : buildMarketUrl(plat, cleanName);
         }
@@ -683,7 +717,6 @@ Zwróć odpowiedź w czystym formacie JSON:
       });
     }
 
-    // Attach genuine measured historical observations from persistent store
     const { points, min30d, max30d, isAllTimeLow } = getGenuinePriceHistory(cleanName);
 
     parsed.priceHistory30d = points;
@@ -691,10 +724,36 @@ Zwróć odpowiedź w czystym formacie JSON:
     parsed.max30d = max30d;
     parsed.isAllTimeLow = isAllTimeLow;
 
+    const hasData = Boolean(parsed.stores && parsed.stores.length > 0);
+    const sourcesQueried = ['Google Search Grounding', 'Allegro REST API', 'Ceneo Feed API', 'OLX Partner API', 'Amazon PA-API'];
+    const sourcesSucceeded = hasData ? ['Google Search Grounding'] : [];
+    const sourcesFailed = hasData
+      ? ['Allegro REST API (unconfigured)', 'Ceneo Feed API (unconfigured)', 'OLX Partner API (unconfigured)', 'Amazon PA-API (unconfigured)']
+      : ['Google Search Grounding', 'Allegro REST API (unconfigured)', 'Ceneo Feed API (unconfigured)', 'OLX Partner API (unconfigured)', 'Amazon PA-API (unconfigured)'];
+
+    if (!hasData) {
+      return res.status(200).json({
+        success: false, // ONLY true when actual data is retrieved!
+        status: 'no_results',
+        data: null,
+        sources: [],
+        errors: ['Brak aktualnych ofert w porównywarce cen dla wybranego przedmiotu.'],
+        sourcesQueried,
+        sourcesSucceeded: [],
+        sourcesFailed,
+        fetchedAt,
+      });
+    }
+
     return res.json({
-      success: true,
+      success: true, // ONLY true when actual data is retrieved
+      status: 'completed',
       data: parsed,
       sources: webSources,
+      sourcesQueried,
+      sourcesSucceeded,
+      sourcesFailed,
+      fetchedAt,
     });
   } catch (error: any) {
     console.error('Compare prices API error:', error?.message);
@@ -702,21 +761,31 @@ Zwróć odpowiedź w czystym formacie JSON:
       success: false,
       status: 'source_unavailable',
       error: 'Porównywarka cen jest chwilowo niedostępna: ' + (error?.message || 'Brak odpowiedzi Google Search Grounding'),
-      sourcesQueried: ['Google Search Grounding'],
+      errors: [error?.message || 'Brak odpowiedzi Google Search Grounding'],
+      sourcesQueried: ['Google Search Grounding', 'Allegro REST API', 'Ceneo Feed API', 'OLX Partner API', 'Amazon PA-API'],
       sourcesSucceeded: [],
       sourcesFailed: ['Google Search Grounding'],
-      fetchedAt: new Date().toISOString()
+      fetchedAt,
     });
   }
 });
 
-// 7. INTERACTIVE AI SHOPPING ADVISOR (Ask about deal profitability & find alternatives)
+// 7. INTERACTIVE AI SHOPPING ADVISOR
 app.post('/api/shopping-assistant', async (req, res) => {
+  const fetchedAt = new Date().toISOString();
   try {
     const { message, productContext, currentPrice } = req.body;
 
     if (!message) {
-      return res.status(400).json({ error: 'Brak treści zapytania do asystenta.' });
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        error: 'Brak treści zapytania do asystenta.',
+        sourcesQueried: [],
+        sourcesSucceeded: [],
+        sourcesFailed: [],
+        fetchedAt
+      });
     }
 
     const prompt = `Jesteś osobistym, bezkompromisowym doradcą zakupowym i ekspertem rynkowym w Polsce.
@@ -749,21 +818,35 @@ Używaj czytelnego formatowania Markdown z pogrubieniami i wypunktowaniami.`;
         uri: c.web.uri,
       }));
 
+    const hasData = Boolean(response.text && response.text.trim().length > 10);
+
     return res.json({
-      success: true,
+      success: hasData,
+      status: hasData ? 'completed' : 'no_results',
       answer: response.text,
       sources: webSources,
+      sourcesQueried: ['Google Search Grounding'],
+      sourcesSucceeded: hasData ? ['Google Search Grounding'] : [],
+      sourcesFailed: hasData ? [] : ['Google Search Grounding'],
+      fetchedAt
     });
   } catch (error: any) {
     console.error('Shopping assistant error:', error);
     return res.status(500).json({
+      success: false,
+      status: 'error',
       error: 'Błąd asystenta zakupowego: ' + (error?.message || 'Nieznany błąd'),
+      sourcesQueried: ['Google Search Grounding'],
+      sourcesSucceeded: [],
+      sourcesFailed: ['Google Search Grounding'],
+      fetchedAt
     });
   }
 });
 
 // 8. DATE & OFFER FRESHNESS VERIFICATION
 app.post('/api/check-date-freshness', async (req, res) => {
+  const fetchedAt = new Date().toISOString();
   try {
     const { listingDate, title, price } = req.body;
 
@@ -796,6 +879,7 @@ app.post('/api/check-date-freshness', async (req, res) => {
 
     return res.json({
       success: true,
+      status: 'completed',
       data: {
         diffDays,
         status,
@@ -804,22 +888,32 @@ app.post('/api/check-date-freshness', async (req, res) => {
         riskNotice,
         checkedAt: now.toISOString(),
       },
+      sourcesQueried: ['DealZ Date Engine'],
+      sourcesSucceeded: ['DealZ Date Engine'],
+      sourcesFailed: [],
+      fetchedAt
     });
   } catch (error: any) {
     console.error('Date freshness error:', error);
     return res.status(500).json({
+      success: false,
+      status: 'error',
       error: 'Błąd weryfikacji daty oferty: ' + (error?.message || 'Nieznany błąd'),
+      sourcesQueried: ['DealZ Date Engine'],
+      sourcesSucceeded: [],
+      sourcesFailed: ['DealZ Date Engine'],
+      fetchedAt
     });
   }
 });
 
 // 9. INSTANT DEAL FINDER & UNIVERSAL DEALZ SEARCH
 app.post('/api/instant-find-deals', async (req, res) => {
-  const { query, link, price, imageBase64, imageMimeType = 'image/jpeg' } = req.body || {};
+  const fetchedAt = new Date().toISOString();
+  const { query, link, price, imageBase64, imageMimeType = 'image/jpeg', mode = 'exact' } = req.body || {};
   let rawSearchTerm = (query || link || '').trim();
 
   try {
-    // 1. Google Lens vision extraction if image is provided
     if (imageBase64) {
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
       const parts: any[] = [
@@ -850,22 +944,35 @@ app.post('/api/instant-find-deals', async (req, res) => {
     }
 
     if (!rawSearchTerm) {
-      return res.status(400).json({ error: 'Podaj nazwę przedmiotu, wklej link lub dodaj zdjęcie do wyszukania.' });
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        error: 'Podaj nazwę przedmiotu, wklej link lub dodaj zdjęcie do wyszukania.',
+        sourcesQueried: [],
+        sourcesSucceeded: [],
+        sourcesFailed: [],
+        fetchedAt
+      });
     }
 
-    // SSRF Protection for URL inputs
     if (rawSearchTerm.startsWith('http://') || rawSearchTerm.startsWith('https://')) {
       if (!isSafeExternalUrl(rawSearchTerm)) {
-        return res.status(400).json({ error: 'Niedozwolony lub prywatny adres URL (ochrona SSRF).' });
+        return res.status(400).json({
+          success: false,
+          status: 'error',
+          error: 'Niedozwolony lub prywatny adres URL (ochrona SSRF).',
+          sourcesQueried: [],
+          sourcesSucceeded: [],
+          sourcesFailed: [],
+          fetchedAt
+        });
       }
     }
 
     const parsedPrice = Number(price) > 0 ? Number(price) : null;
 
-    // 2. Execute Universal DealZ Search across marketplaces with real Google Search Grounding
-    const rankingResult = await executeUniversalSearch(ai, rawSearchTerm, parsedPrice);
+    const rankingResult = await executeUniversalSearch(ai, rawSearchTerm, parsedPrice, mode as any);
 
-    // Record verified prices into persistent store (survives process restart)
     for (const offer of rankingResult.sortedOffers) {
       if (offer.price !== null && offer.price > 0) {
         const pKey = priceHistoryStore.generateProductKey(
@@ -889,7 +996,6 @@ app.post('/api/instant-find-deals', async (req, res) => {
       }
     }
 
-    // Map to API response contract expected by frontend — ZERO fake defaults
     const mappedSimilarDeals = rankingResult.sortedOffers.map((offer: Offer) => {
       let plat: 'Allegro' | 'OLX' | 'Ceneo' | 'Amazon' = 'Allegro';
       const lowSrc = offer.sourceName.toLowerCase();
@@ -904,7 +1010,7 @@ app.post('/api/instant-find-deals', async (req, res) => {
         title: offer.product.title,
         platform: plat,
         seller: offer.sellerName || offer.sourceName,
-        price: offer.price, // Can be null! Never fake 0
+        price: offer.price,
         currency: offer.currency,
         condition: offer.condition === 'new' ? 'Nowy' : offer.condition === 'used' ? 'Używany' : 'Stan sprawdzony',
         shipping: offer.shippingCost === 0 ? 'Darmowa dostawa' : offer.shippingCost ? `${offer.shippingCost} zł` : 'Sprawdź u sprzedawcy',
@@ -975,10 +1081,25 @@ app.post('/api/instant-find-deals', async (req, res) => {
       marketplaceSearchLinks: rankingResult.marketplaceSearchLinks,
     };
 
+    const hasOffers = rankingResult.totalOffersFound > 0;
+    const sourcesQueried = rankingResult.provenance?.sourcesQueried?.length > 0 
+      ? rankingResult.provenance.sourcesQueried 
+      : ['Google Search Grounding', 'Allegro REST API', 'OLX Partner API', 'Ceneo Feed API', 'Amazon PA-API'];
+    const sourcesSucceeded = hasOffers 
+      ? (rankingResult.provenance?.sourcesSucceeded || ['Google Search Grounding']) 
+      : [];
+    const sourcesFailed = rankingResult.provenance?.sourcesFailed?.length > 0 
+      ? rankingResult.provenance.sourcesFailed 
+      : ['Allegro REST API (unconfigured)', 'OLX Partner API (unconfigured)', 'Ceneo Feed API (unconfigured)', 'Amazon PA-API (unconfigured)'];
+
     return res.json({
-      success: true,
-      status: rankingResult.totalOffersFound > 0 ? 'completed' : 'no_results',
+      success: hasOffers, // success = true ONLY when actual data is retrieved!
+      status: hasOffers ? 'completed' : (rankingResult.searchStatus || 'no_results'),
       data: finalResponse,
+      sourcesQueried,
+      sourcesSucceeded,
+      sourcesFailed,
+      fetchedAt: rankingResult.provenance?.fetchedAt || fetchedAt,
     });
   } catch (error: any) {
     console.error('DealZ universal search error:', error?.message);
@@ -986,10 +1107,10 @@ app.post('/api/instant-find-deals', async (req, res) => {
       success: false,
       status: 'error',
       error: 'Błąd podczas wyszukiwania ofert na żywo: ' + (error?.message || 'Nieznany błąd'),
-      sourcesQueried: ['DealZ Universal Search'],
+      sourcesQueried: ['Google Search Grounding', 'Allegro REST API', 'OLX Partner API', 'Ceneo Feed API', 'Amazon PA-API'],
       sourcesSucceeded: [],
-      sourcesFailed: ['DealZ Universal Search'],
-      fetchedAt: new Date().toISOString()
+      sourcesFailed: ['Google Search Grounding'],
+      fetchedAt
     });
   }
 });

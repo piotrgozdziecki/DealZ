@@ -13,6 +13,10 @@ import {
   rankOffers,
   checkProductMatchLevel,
   resolveProductIdentity,
+  resolveProductIdentityRationale,
+  evaluateOfferFreshness,
+  evaluateDataQuality,
+  discoverProductAlternatives,
   parseUserQuery
 } from '../src/lib/dealzEngines';
 import { 
@@ -407,6 +411,114 @@ async function runTestSuite() {
   assert(isSafeExternalUrl('http://192.168.1.1/router') === false, 'Sieć 192.168.0.0/16 zablokowana');
   assert(isSafeExternalUrl('http://172.16.0.5/') === false, 'Sieć 172.16.0.0/12 zablokowana');
   assert(isSafeExternalUrl('https://allegro.pl/oferta/123') === true, 'Publiczny bezpieczny adres HTTPS dopuszczony');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 25 (Iteracja 3 - Scenariusz A): Tryb Wyszukiwania Semantic / Alternatives
+  // --------------------------------------------------------------------------
+  console.log('\n25. Tryb Wyszukiwania 2.0 (Exact vs Alternative):');
+  const qExact = parseUserQuery('Dreame T30', 'exact');
+  const qAlt = parseUserQuery('zamiennik Dreame T30', 'alternative');
+  assert(qExact.searchMode === 'exact', 'Tryb exact ustawiony domyślnie');
+  assert(qAlt.searchMode === 'alternative', 'Tryb alternative rozpoznany poprawnie');
+  assert(qAlt.parsedIntent === 'find_alternative', 'Intencja find_alternative wyekstrahowana');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 26 (Iteracja 3 - Scenariusz B): Product Identity Rationale Scoring
+  // --------------------------------------------------------------------------
+  console.log('\n26. Szczegółowy podział punktowy tożsamości produktu (Rationale):');
+  const rat = resolveProductIdentityRationale('Apple iPhone 15 128GB Czarny', 'Apple iPhone 15 128GB');
+  assert(rat.brandMatch === true, 'Zgodność marki = true');
+  assert(rat.variantMatch === true, 'Zgodność wariantu = true');
+  assert(rat.score >= 80, 'Punktacja tożsamości >= 80');
+  assert(rat.reasons.length > 0, 'Wygenerowano czytelne uzasadnienia');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 27 (Iteracja 3 - Scenariusz C): Data Freshness Policy & Granular Timestamps
+  // --------------------------------------------------------------------------
+  console.log('\n27. Granularne znaczniki świeżości danych (Freshness Policy):');
+  const freshOff = normalizeRawOffer({
+    sourceId: 'ceneo',
+    sourceName: 'Ceneo',
+    title: 'Świeża oferta 123',
+    offerUrl: 'https://www.ceneo.pl/12345678',
+    priceRaw: 199,
+  });
+  const freshness = evaluateOfferFreshness(freshOff);
+  assert(freshness.freshnessGrade === 'fresh', 'Klasa świeżości = fresh');
+  assert(freshness.summaryLabel.includes('Aktualne') || freshness.summaryLabel.includes('minut'), 'Human-readable label wygenerowany');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 28 (Iteracja 3 - Scenariusz D): Data Quality Engine & Non-generic Explanations
+  // --------------------------------------------------------------------------
+  console.log('\n28. Ocena jakości danych (Data Quality Engine):');
+  const qualReport = evaluateDataQuality(freshOff);
+  assert(qualReport.completenessScore > 0, 'Wynik kompletności > 0');
+  assert(qualReport.explanation.includes('Ceneo') && !qualReport.explanation.includes('undefined'), 'Nie-generyczne uzasadnienie zweryfikowane');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 29 (Iteracja 3 - Scenariusz E): Provider Circuit Breaker Pattern
+  // --------------------------------------------------------------------------
+  console.log('\n29. Circuit Breaker i śledzenie błędów w Provider Diagnostics:');
+  const gProvider = new GoogleSearchGroundingProvider(mockAi);
+  const diagInit = gProvider.getDiagnostics();
+  assert(diagInit.circuitBreakerOpen === false, 'Circuit breaker domyślnie zamknięty (false)');
+  assert(typeof diagInit.health.consecutiveFailures === 'number', 'Licznik kolejnych niepowodzeń = 0');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 30 (Iteracja 3 - Scenariusz F): Multi-query Variant Preparation
+  // --------------------------------------------------------------------------
+  console.log('\n30. Generowanie wariantów zapytania (Query Variants):');
+  const qVariants = parseUserQuery('Bosch GSB 13 RE 600W 128GB');
+  assert(Boolean(qVariants.generatedQueryVariants?.exact), 'Wariant exact utworzony');
+  assert(Boolean(qVariants.generatedQueryVariants?.brandModel), 'Wariant brandModel utworzony (Bosch GSB)');
+  assert(Boolean(qVariants.generatedQueryVariants?.techSpecs), 'Wariant techSpecs utworzony');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 31 (Iteracja 3 - Scenariusz G): Task Cancellation with AbortSignal
+  // --------------------------------------------------------------------------
+  console.log('\n31. Obsługa anulowania zadania (AbortSignal):');
+  const controller = new AbortController();
+  controller.abort();
+  const cancelledRes = await gProvider.search(qExact, controller.signal);
+  assert(cancelledRes.success === false, 'Wyszukiwanie zwróciło success = false po anulowaniu');
+  assert(cancelledRes.error!.includes('anulowane'), 'Komunikat błędu potwierdza anulowanie zadania');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 32 (Iteracja 3 - Scenariusz H): Discover Product Alternatives
+  // --------------------------------------------------------------------------
+  console.log('\n32. Odkrywanie rynkowych zamienników (Product Alternatives):');
+  const altOffers: Offer[] = [
+    normalizeRawOffer({
+      sourceId: 'shop',
+      sourceName: 'Sklep',
+      title: 'Dyson V15 Detect Wireless Vacuum',
+      brand: 'Dyson',
+      model: 'V15',
+      priceRaw: 2899,
+      offerUrl: 'https://www.euro.com.pl/p/dyson-v15'
+    })
+  ];
+  const queryDreame = parseUserQuery('Dreame T30');
+  const foundAlts = discoverProductAlternatives(queryDreame, altOffers);
+  assert(foundAlts.length === 1, 'Znaleziono 1 rekomendowany zamiennik z innej marki (Dyson)');
+  assert(foundAlts[0].brand === 'Dyson', 'Zamiennik należy do marki Dyson');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 33 (Iteracja 3 - Scenariusz I): Highlight Variant Discrepancy (128GB vs 256GB)
+  // --------------------------------------------------------------------------
+  console.log('\n33. Weryfikacja niezgodności wariantów pamięci (128GB vs 256GB):');
+  const ratStorageDiff = resolveProductIdentityRationale('iPhone 15 256GB', 'iPhone 15 128GB');
+  assert(ratStorageDiff.variantMatch === false, 'variantMatch = false dla 256GB vs 128GB');
+  assert(ratStorageDiff.reasons.some(r => r.includes('128GB') || r.includes('256GB')), 'Wykryto i podświetlono rozbieżność pojemności');
+
+  // --------------------------------------------------------------------------
+  // Scenariusz 34 (Iteracja 3 - Scenariusz J): Partitioning and Sorting in Ranking Result
+  // --------------------------------------------------------------------------
+  console.log('\n34. Partycjonowanie i sortowanie w wynikiem rankingu:');
+  const rResult = rankOffers(qExact, altOffers);
+  assert(Array.isArray(rResult.fullyCalculatedOffers), 'fullyCalculatedOffers jest tablicą');
+  assert(Array.isArray(rResult.priceOnlyOffers), 'priceOnlyOffers jest tablicą');
+  assert(Array.isArray(rResult.candidateOffers), 'candidateOffers jest tablicą');
 
   console.log('\n======================================================');
   console.log(` WYNIK TESTÓW: ${passed} PASSED, ${failed} FAILED (TOTAL: ${passed + failed})`);

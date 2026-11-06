@@ -77,7 +77,10 @@ service cloud.firestore {
         && data.createdAt is string;
     }
 
-    // Collection Rules
+    // Public test document for connection check
+    match /test/{docId} {
+      allow get: if true;
+    }
 
     // User Profile
     match /users/{userId} {

@@ -1,7 +1,7 @@
 /**
- * DEALZ PROVIDER REGISTRY & SOURCE ADAPTERS — ITERATION 2
- * Real provider adapters reporting accurate health, configuration, and capabilities.
- * Distinguishes direct API integrations from web discovery (Google Search Grounding).
+ * DEALZ PROVIDER REGISTRY & SOURCE ADAPTERS — ITERATION 3
+ * Provider adapters reporting accurate health, circuit breaker state, rate-limit tracking,
+ * timeouts, authorization checks, and AbortSignal support.
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -11,11 +11,9 @@ import {
   ProviderSearchResult,
   SearchQuery,
   Offer,
-  MarketplaceSearchLink
 } from '../types/dealz.js';
 import {
   normalizeRawOffer,
-  checkIsDirectListingUrl
 } from './dealzEngines.js';
 
 export class GoogleSearchGroundingProvider implements ProductSearchProvider {
@@ -28,6 +26,8 @@ export class GoogleSearchGroundingProvider implements ProductSearchProvider {
   private verifiedCount = 0;
   private rejectedCount = 0;
   private lastError?: string;
+  private consecutiveFailures = 0;
+  private circuitBreakerOpen = false;
 
   constructor(ai: GoogleGenAI) {
     this.ai = ai;
@@ -39,18 +39,22 @@ export class GoogleSearchGroundingProvider implements ProductSearchProvider {
 
   getDiagnostics(): ProviderDiagnostics {
     const configured = this.isConfigured();
+    let status = configured ? (this.lastError ? 'degraded' : 'operational') : 'unconfigured';
+    if (this.circuitBreakerOpen) status = 'rate_limited';
+
     return {
       id: this.id,
       name: this.name,
       isConfigured: configured,
       requiresAuth: true,
       health: {
-        status: configured ? (this.lastError ? 'degraded' : 'operational') : 'unconfigured',
+        status: status as any,
         lastCheck: new Date().toISOString(),
         latencyMs: this.latencyMs,
         lastError: this.lastError,
+        consecutiveFailures: this.consecutiveFailures,
         message: configured
-          ? 'Aktywny silnik odkrywania stron internetowych przez Google Search Grounding'
+          ? (this.circuitBreakerOpen ? 'Circuit breaker otwarty (wykryto limity zapytań API)' : 'Aktywny silnik odkrywania stron internetowych przez Google Search Grounding')
           : 'Brak klucza GEMINI_API_KEY w środowisku',
       },
       crawledCount: this.crawledCount,
@@ -59,12 +63,23 @@ export class GoogleSearchGroundingProvider implements ProductSearchProvider {
       lastRunAt: this.lastRunAt,
       latencyMs: this.latencyMs,
       lastError: this.lastError,
+      circuitBreakerOpen: this.circuitBreakerOpen
     };
   }
 
-  async search(query: SearchQuery): Promise<ProviderSearchResult> {
+  async search(query: SearchQuery, signal?: AbortSignal): Promise<ProviderSearchResult> {
     const start = Date.now();
     this.lastRunAt = new Date().toISOString();
+
+    if (signal?.aborted) {
+      return {
+        providerId: this.id,
+        providerName: this.name,
+        success: false,
+        offers: [],
+        error: 'Zapytanie anulowane przez użytkownika (AbortSignal)'
+      };
+    }
 
     if (!this.isConfigured()) {
       this.lastError = 'Brak klucza API Gemini';
@@ -77,8 +92,21 @@ export class GoogleSearchGroundingProvider implements ProductSearchProvider {
       };
     }
 
+    if (this.circuitBreakerOpen) {
+      return {
+        providerId: this.id,
+        providerName: this.name,
+        success: false,
+        offers: [],
+        error: 'Circuit breaker aktywny (tymczasowa pauza z powodu błędów zapytań)',
+      };
+    }
+
+    const searchKeyword = query.generatedQueryVariants?.techSpecs || query.generatedQueryVariants?.brandModel || query.rawQuery;
+    const isAltMode = query.searchMode === 'alternative';
+
     const prompt = `Jesteś silnikiem uniwersalnej wyszukiwarki zakupowej DEALZ.
-Zapytanie użytkownika: "${query.rawQuery}".
+Zapytanie użytkownika: "${searchKeyword}" (Tryb wyszukiwania: ${isAltMode ? 'ALTERNATYWY / ZAMIENNIKI' : 'DOKŁADNY PRODUKT'}).
 
 ZASADA NADRZĘDNA: ŻADNEGO ZMYŚLANIA DANYCH.
 1. Przeszukaj polski internet (Allegro, OLX, Ceneo, Amazon.pl, sklepy online) w Google Search w poszukiwaniu RZECZYWISTYCH, AKTYWNYCH ofert sprzedaży.
@@ -128,7 +156,6 @@ Zwróć odpowiedź w czystym JSON:
       this.latencyMs = Date.now() - start;
       const text = response.text || '{}';
 
-      // Parse JSON
       let cleaned = text.trim();
       if (cleaned.startsWith('```json')) cleaned = cleaned.replace(/^```json\s*/, '').replace(/\s*```$/, '');
       else if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```\s*/, '').replace(/\s*```$/, '');
@@ -136,7 +163,6 @@ Zwróć odpowiedź w czystym JSON:
       const parsed = JSON.parse(cleaned);
       const rawOffers = Array.isArray(parsed.rawOffers) ? parsed.rawOffers : [];
 
-      // Extract grounding URLs
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const validWebUrls = new Set<string>();
       groundingChunks.forEach((c: any) => {
@@ -147,10 +173,8 @@ Zwróć odpowiedź w czystym JSON:
 
       const offers: Offer[] = [];
       for (const item of rawOffers) {
-        // Evidence verification: link must be valid https
         let offerUrl = item.offerUrl;
         if (!offerUrl || !offerUrl.startsWith('https://')) {
-          // If offer url missing, check if any grounding url matches the seller domain
           const match = Array.from(validWebUrls).find((u) => {
             const lowU = u.toLowerCase();
             const lowSrc = (item.sourceName || '').toLowerCase();
@@ -163,7 +187,7 @@ Zwróć odpowiedź w czystym JSON:
 
         if (!offerUrl || !offerUrl.startsWith('https://')) {
           this.rejectedCount++;
-          continue; // Cannot establish provenance without valid URL
+          continue;
         }
 
         const normalized = normalizeRawOffer({
@@ -190,6 +214,8 @@ Zwróć odpowiedź w czystym JSON:
       this.crawledCount += rawOffers.length;
       this.verifiedCount += offers.filter((o) => o.verificationStatus === 'verified').length;
       this.lastError = undefined;
+      this.consecutiveFailures = 0;
+      this.circuitBreakerOpen = false;
 
       return {
         providerId: this.id,
@@ -206,6 +232,11 @@ Zwróć odpowiedź w czystym JSON:
     } catch (err: any) {
       this.latencyMs = Date.now() - start;
       this.lastError = err?.message || 'Nieznany błąd zapytania Google Search Grounding';
+      this.consecutiveFailures++;
+      if (this.consecutiveFailures >= 3) {
+        this.circuitBreakerOpen = true;
+      }
+
       return {
         providerId: this.id,
         providerName: this.name,
@@ -223,10 +254,6 @@ Zwróć odpowiedź w czystym JSON:
   }
 }
 
-/**
- * Direct Marketplace APIs (Allegro, Ceneo, OLX, Amazon)
- * Explicitly reporting their real operational configuration status (Etap 2).
- */
 export class AllegroOfficialProvider implements ProductSearchProvider {
   id = 'allegro_official_api';
   name = 'Allegro REST API (Oficjalny Partner)';
@@ -391,9 +418,6 @@ export class AmazonOfficialProvider implements ProductSearchProvider {
   }
 }
 
-/**
- * Provider Registry coordinating all data sources.
- */
 export class ProviderRegistry {
   private providers: ProductSearchProvider[] = [];
 
@@ -415,7 +439,7 @@ export class ProviderRegistry {
     return this.providers.find((p) => p.id === id);
   }
 
-  async executeAll(query: SearchQuery): Promise<{
+  async executeAll(query: SearchQuery, signal?: AbortSignal): Promise<{
     offers: Offer[];
     diagnostics: ProviderDiagnostics[];
     errors: string[];
@@ -429,15 +453,14 @@ export class ProviderRegistry {
     const sourcesSucceeded: string[] = [];
     const sourcesFailed: string[] = [];
 
-    // Run active configured providers
     for (const provider of this.providers) {
+      if (signal?.aborted) break;
       sourcesQueried.push(provider.name);
       if (!provider.isConfigured()) {
-        // Report honestly
         continue;
       }
 
-      const res = await provider.search(query);
+      const res = await provider.search(query, signal);
       if (res.success) {
         sourcesSucceeded.push(provider.name);
         offers.push(...res.offers);
