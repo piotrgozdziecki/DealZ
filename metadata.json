@@ -1,0 +1,6 @@
+{
+  "name": "DealRadar AI – Łowca Okazji i Wycena Ofert z Audio",
+  "description": "Inteligentny analizator cen i okazji na Allegro, OLX i Ceneo z podsumowaniami audio TTS do słuchania w podróży, wyszukiwaniem Google Search i analizą zdjęć.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

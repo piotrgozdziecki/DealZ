@@ -1,0 +1,164 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile with preference settings and status",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique Firebase User ID",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 128
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User avatar URL",
+          "maxLength": 512
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp string"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "AnalyzedOffer": {
+      "title": "Analyzed Offer",
+      "description": "Stored analysis result for a market offer",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "price": {
+          "type": "number"
+        },
+        "estimatedMarketPrice": {
+          "type": "number"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["BIERZ TERAZ", "NEGOCJUJ", "SZUKAJ DALEJ", "NIEOPŁACALNE"]
+        },
+        "dealScore": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "userId", "title", "price", "createdAt"]
+    },
+    "PriceAlert": {
+      "title": "Price Alert Watchlist Item",
+      "description": "Item monitored for price drops",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "targetPrice": {
+          "type": "number"
+        },
+        "currentPrice": {
+          "type": "number"
+        },
+        "originalPrice": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "userId", "title", "targetPrice", "currentPrice", "createdAt"]
+    },
+    "ShoppingChatMessage": {
+      "title": "AI Advisor Message",
+      "description": "Chat message from AI Shopping Advisor",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "userId", "role", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile document"
+    },
+    "/users/{userId}/offers/{offerId}": {
+      "schema": { "$ref": "#/entities/AnalyzedOffer" },
+      "description": "Analyzed market offers saved by user"
+    },
+    "/users/{userId}/alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/PriceAlert" },
+      "description": "Active price drop alerts set by user"
+    },
+    "/users/{userId}/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/ShoppingChatMessage" },
+      "description": "AI Shopping Assistant chat history"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for enhancing price intelligence with stock availability analysis and raw fact reporting.\n- Backend: Update Gemini prompts to probe for real-time stock status and generate concise, data-driven reports.\n- Data Model: Add availability status and raw stats fields to API responses.\n- Frontend: Display stock indicators and a new 'Raw Market Facts' panel for data-oriented users.",
+  "updatedAt": "2026-11-05T21:45:20.225508860Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
