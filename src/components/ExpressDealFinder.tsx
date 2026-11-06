@@ -126,7 +126,22 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
       case 'out_of_stock':
         return { label: 'BRAK TOWARU', color: 'text-rose-400 bg-rose-400/10 border-rose-400/20' };
       default:
-        return { label: 'DOSTĘPNOŚĆ NIEZNANA', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' };
+        return { label: 'DOSTĘPNOŚĆ: DO WERYFIKACJI', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' };
+    }
+  };
+
+  const getVerificationBadge = (status?: string) => {
+    switch (status) {
+      case 'verified':
+        return { label: 'WERYFIKACJA PEŁNA', color: 'text-emerald-300 bg-emerald-950/80 border-emerald-500/40' };
+      case 'partially_verified':
+        return { label: 'CZĘŚCIOWA WERYFIKACJA', color: 'text-amber-300 bg-amber-950/80 border-amber-500/40' };
+      case 'stale':
+        return { label: 'OFERTA NIEAKTUALNA', color: 'text-rose-300 bg-rose-950/80 border-rose-500/40' };
+      case 'unavailable':
+        return { label: 'NIEDOSTĘPNA', color: 'text-slate-400 bg-slate-900 border-slate-700' };
+      default:
+        return { label: 'KANDYDAT', color: 'text-slate-300 bg-slate-900 border-slate-700' };
     }
   };
 
@@ -314,14 +329,22 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
                   {/* Profit / Savings Pill */}
                   <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-right shrink-0">
                     <span className="text-[11px] text-slate-400 uppercase font-semibold block">
-                      {result.isProfitable ? 'Twój zysk / oszczędność:' : 'Różnica do średniej:'}
+                      {result.benchmarkPrice !== null ? (result.isProfitable ? 'Twój zysk / oszczędność:' : 'Różnica do średniej:') : 'Porównanie rynkowe:'}
                     </span>
                     <span className={`text-xl sm:text-2xl font-extrabold font-mono ${vStyle.textColor}`}>
-                      {result.isProfitable ? `+${result.savingsAmount.toLocaleString()} PLN` : `-${Math.abs(result.savingsAmount).toLocaleString()} PLN`}
+                      {result.benchmarkPrice !== null ? (
+                        result.isProfitable 
+                          ? `+${result.savingsAmount.toLocaleString()} PLN` 
+                          : `-${Math.abs(result.savingsAmount).toLocaleString()} PLN`
+                      ) : (
+                        'Brak cen odniesienia'
+                      )}
                     </span>
-                    <span className="text-[11px] text-slate-400 block font-mono">
-                      ({result.savingsPercentage > 0 ? `-${result.savingsPercentage}%` : `+${Math.abs(result.savingsPercentage)}%`})
-                    </span>
+                    {result.benchmarkPrice !== null && (
+                      <span className="text-[11px] text-slate-400 block font-mono">
+                        ({result.savingsPercentage > 0 ? `-${result.savingsPercentage}%` : `+${Math.abs(result.savingsPercentage)}%`})
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -330,14 +353,18 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
                   <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800">
                     <span className="text-slate-400 block text-[11px]">Cena wyjściowa:</span>
                     <span className="text-white font-mono font-bold text-sm">
-                      {result.targetProduct.identifiedPrice.toLocaleString()} {result.targetProduct.currency}
+                      {result.targetProduct.identifiedPrice !== null 
+                        ? `${result.targetProduct.identifiedPrice.toLocaleString()} ${result.targetProduct.currency}` 
+                        : 'Do ustalenia'}
                     </span>
                   </div>
 
                   <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800">
                     <span className="text-slate-400 block text-[11px]">Średnia norma rynkowa:</span>
                     <span className="text-emerald-400 font-mono font-bold text-sm">
-                      {result.benchmarkPrice.toLocaleString()} {result.targetProduct.currency}
+                      {result.benchmarkPrice !== null 
+                        ? `${result.benchmarkPrice.toLocaleString()} ${result.targetProduct.currency}` 
+                        : 'Brak zweryfikowanych cen'}
                     </span>
                   </div>
 
@@ -358,20 +385,26 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
                       <div className="space-y-1">
-                        <span className="text-[10px] text-slate-500 uppercase block">Aktywne oferty</span>
+                        <span className="text-[10px] text-slate-500 uppercase block">Oferty z ceną</span>
                         <span className="text-sm font-mono font-bold text-white">{result.rawMarketStats.totalActiveOffers}</span>
                       </div>
                       <div className="space-y-1 border-l border-slate-800">
                         <span className="text-[10px] text-slate-500 uppercase block">Mediana ceny</span>
-                        <span className="text-sm font-mono font-bold text-white">{result.rawMarketStats.medianPrice} PLN</span>
+                        <span className="text-sm font-mono font-bold text-white">
+                          {result.rawMarketStats.medianPrice !== null ? `${result.rawMarketStats.medianPrice} PLN` : 'Brak'}
+                        </span>
                       </div>
                       <div className="space-y-1 border-l border-slate-800">
                         <span className="text-[10px] text-slate-500 uppercase block">Rozpiętość (Min-Max)</span>
-                        <span className="text-sm font-mono font-bold text-white">{result.rawMarketStats.minPrice}-{result.rawMarketStats.maxPrice}</span>
+                        <span className="text-sm font-mono font-bold text-white">
+                          {result.rawMarketStats.minPrice !== null && result.rawMarketStats.maxPrice !== null 
+                            ? `${result.rawMarketStats.minPrice}-${result.rawMarketStats.maxPrice} PLN` 
+                            : 'Brak'}
+                        </span>
                       </div>
                       <div className="space-y-1 border-l border-slate-800">
                         <span className="text-[10px] text-slate-500 uppercase block">Ostatnia zmiana</span>
-                        <span className="text-sm font-mono font-bold text-cyan-400">{result.rawMarketStats.lastPriceChange || 'Dzisiaj'}</span>
+                        <span className="text-sm font-mono font-bold text-cyan-400">{result.rawMarketStats.lastPriceChange || 'Bieżące wyszukiwanie'}</span>
                       </div>
                     </div>
                   </div>
@@ -380,155 +413,202 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
             );
           })()}
 
-          {/* 2. Direct Matching Auctions List with BUY NOW Buttons */}
+          {/* 2. Direct Matching Auctions List & Marketplace Search Links */}
           <div>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-              <div className="flex items-center space-x-2">
-                <ShoppingBag className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                  <span>Aktualne Aukcje i Oferty na Żywo ({result.similarDeals.length})</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300">
-                    100% Prawdziwe Linki
-                  </span>
-                </h3>
-              </div>
-              <span className="text-[11px] text-slate-400">Bezpośrednie przejścia do zakupów i licytacji</span>
-            </div>
-
-            {/* Direct 1-Click Live Market Explore Bar */}
-            {result.exactLiveLinks && (
-              <div className="p-3 mb-3.5 rounded-xl bg-slate-950 border border-slate-800/90 space-y-2">
+            {/* Separate Marketplace Search Links Section */}
+            {(result.marketplaceSearchLinks?.length || result.exactLiveLinks) && (
+              <div className="p-3.5 mb-4 rounded-xl bg-slate-950 border border-slate-800/90 space-y-2">
                 <div className="flex items-center justify-between text-[11px] text-slate-400">
                   <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    Sprawdź na żywo na polskich platformach (od najniższej ceny):
+                    <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                    Linki nawigacyjne do wyszukiwarek platform (brak bezpośrednich ofert w oficjalnym API):
                   </span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <a
-                    href={result.exactLiveLinks.allegro}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-h-[40px] px-3 py-2 rounded-lg bg-orange-950/60 hover:bg-orange-900/60 border border-orange-700/60 text-orange-200 font-semibold flex items-center justify-center gap-1.5 transition text-[11px]"
-                  >
-                    <span>Allegro (Na żywo)</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-
-                  <a
-                    href={result.exactLiveLinks.olx}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-h-[40px] px-3 py-2 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/60 text-emerald-200 font-semibold flex items-center justify-center gap-1.5 transition text-[11px]"
-                  >
-                    <span>OLX (Przesyłka)</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-
-                  <a
-                    href={result.exactLiveLinks.ceneo}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-h-[40px] px-3 py-2 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-700/60 text-cyan-200 font-semibold flex items-center justify-center gap-1.5 transition text-[11px]"
-                  >
-                    <span>Ceneo (100+ sklepów)</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-
-                  <a
-                    href={result.exactLiveLinks.amazon}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-h-[40px] px-3 py-2 rounded-lg bg-amber-950/60 hover:bg-amber-900/60 border border-amber-700/60 text-amber-200 font-semibold flex items-center justify-center gap-1.5 transition text-[11px]"
-                  >
-                    <span>Amazon.pl Prime</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                  {result.marketplaceSearchLinks && result.marketplaceSearchLinks.length > 0 ? (
+                    result.marketplaceSearchLinks.map((link, idx) => (
+                      <a
+                        key={idx}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[40px] px-3 py-2 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-slate-200 font-semibold flex items-center justify-between gap-1.5 transition text-[11px]"
+                      >
+                        <span className="truncate">{link.platform} (Szukaj)</span>
+                        <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+                      </a>
+                    ))
+                  ) : result.exactLiveLinks ? (
+                    <>
+                      <a
+                        href={result.exactLiveLinks.allegro}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[40px] px-3 py-2 rounded-lg bg-orange-950/40 hover:bg-orange-900/50 border border-orange-800/50 text-orange-200 font-semibold flex items-center justify-between gap-1.5 transition text-[11px]"
+                      >
+                        <span>Allegro (Szukaj)</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                      <a
+                        href={result.exactLiveLinks.olx}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[40px] px-3 py-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-800/50 text-emerald-200 font-semibold flex items-center justify-between gap-1.5 transition text-[11px]"
+                      >
+                        <span>OLX (Szukaj)</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                      <a
+                        href={result.exactLiveLinks.ceneo}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[40px] px-3 py-2 rounded-lg bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/50 text-cyan-200 font-semibold flex items-center justify-between gap-1.5 transition text-[11px]"
+                      >
+                        <span>Ceneo (Szukaj)</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                      <a
+                        href={result.exactLiveLinks.amazon}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[40px] px-3 py-2 rounded-lg bg-amber-950/40 hover:bg-amber-900/50 border border-amber-800/50 text-amber-200 font-semibold flex items-center justify-between gap-1.5 transition text-[11px]"
+                      >
+                        <span>Amazon.pl (Szukaj)</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                    </>
+                  ) : null}
                 </div>
               </div>
             )}
 
+            {/* Real Offers Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+              <div className="flex items-center space-x-2">
+                <ShoppingBag className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                  <span>Rzeczywiste Oferty Rynkowe ({result.similarDeals.length})</span>
+                  {result.similarDeals.some(d => d.verificationStatus === 'verified') && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300">
+                      Zweryfikowane źródła
+                    </span>
+                  )}
+                </h3>
+              </div>
+              <span className="text-[11px] text-slate-400">Bezpośrednie przejścia do konkretnych ofert</span>
+            </div>
+
+            {/* Partitioned Offers: Verified First, then Candidates */}
             <div className="space-y-2.5">
-              {result.similarDeals.map((deal, idx) => (
-                <div
-                  key={idx}
-                  className={`p-4 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                    deal.isCheaper
-                      ? 'bg-emerald-950/20 border-emerald-500/40 hover:border-emerald-500/60'
-                      : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  {/* Left: Platform & Title */}
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getPlatformBadge(deal.platform)}`}>
-                        {deal.platform}
-                      </span>
-                      {deal.badge && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                          {deal.badge}
-                        </span>
-                      )}
-                      <span className="text-xs text-slate-400">{deal.condition}</span>
-                    </div>
-
-                    <h4 className="text-sm font-bold text-white mt-1 leading-snug">
-                      {deal.title}
-                    </h4>
-
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mt-1">
-                      <span>Wysyłka: <strong className="text-slate-300">{deal.shippingSpeed || deal.shipping}</strong></span>
-                      {deal.seller && <span>Sprzedawca: <strong className="text-slate-300">{deal.seller}</strong></span>}
-                      {deal.availabilityStatus && (
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${getStockBadge(deal.availabilityStatus).color}`}>
-                          {getStockBadge(deal.availabilityStatus).label}
-                        </span>
-                      )}
-                      {deal.matchAccuracy && (
-                        <span className="flex items-center gap-1">
-                          Dokładność: 
-                          <span className={`font-bold ${deal.matchAccuracy > 90 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                            {deal.matchAccuracy}%
-                          </span>
-                        </span>
-                      )}
-                      {deal.priceDifferenceVsTarget !== 0 && (
-                        <span className={`font-mono font-bold ${deal.priceDifferenceVsTarget < 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                          {deal.priceDifferenceVsTarget < 0
-                            ? `(${Math.abs(deal.priceDifferenceVsTarget)} zł taniej!)`
-                            : `(+${deal.priceDifferenceVsTarget} zł)`}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right: Price & Direct Buy Now button */}
-                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
-                    <div className="text-left sm:text-right">
-                      {deal.price && deal.price > 0 ? (
-                        <div className="text-base sm:text-lg font-extrabold font-mono text-white">
-                          {deal.price.toLocaleString()} <span className="text-xs font-normal text-slate-400">{deal.currency}</span>
-                        </div>
-                      ) : (
-                        <div className="text-xs font-semibold text-cyan-300 bg-cyan-950/60 px-2.5 py-1 rounded-md border border-cyan-800/60">
-                          Sprawdź aktualną cenę
-                        </div>
-                      )}
-                      <span className="text-[10px] text-emerald-400 block font-semibold mt-0.5">● oferta aktywna</span>
-                    </div>
-
-                    <a
-                      href={deal.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="min-h-[44px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-700/20 transition active:scale-95"
-                    >
-                      <span>{deal.price && deal.price > 0 ? 'KUP TERAZ' : 'PRZEJDŹ DO OFERTY'}</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
+              {result.similarDeals.length === 0 ? (
+                <div className="p-8 text-center rounded-xl bg-slate-950/60 border border-slate-800/80 text-slate-400 text-sm">
+                  Nie znaleziono bezpośrednich, aktywnych ofert dla tego zapytania. Sprawdź powyższe linki do platform handlowych.
                 </div>
-              ))}
+              ) : (
+                result.similarDeals.map((deal, idx) => {
+                  const vBadge = getVerificationBadge(deal.verificationStatus);
+                  const isVerified = deal.verificationStatus === 'verified';
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-4 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        isVerified
+                          ? 'bg-emerald-950/20 border-emerald-500/40 hover:border-emerald-500/60'
+                          : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Left: Platform, Verification & Title */}
+                      <div className="flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getPlatformBadge(deal.platform)}`}>
+                            {deal.platform}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${vBadge.color}`}>
+                            {vBadge.label}
+                          </span>
+                          {deal.badge && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                              {deal.badge}
+                            </span>
+                          )}
+                          <span className="text-xs text-slate-400">{deal.condition}</span>
+                        </div>
+
+                        <h4 className="text-sm font-bold text-white mt-1.5 leading-snug">
+                          {deal.title}
+                        </h4>
+
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mt-1.5">
+                          <span>
+                            Dostawa:{' '}
+                            <strong className="text-slate-300">
+                              {deal.shippingCost !== null && deal.shippingCost !== undefined
+                                ? (deal.shippingCost === 0 ? 'Darmowa dostawa' : `${deal.shippingCost} zł`)
+                                : (deal.shippingSpeed || deal.shipping || 'Koszt nieznany')}
+                            </strong>
+                          </span>
+                          {deal.seller && <span>Sprzedawca: <strong className="text-slate-300">{deal.seller}</strong></span>}
+                          {deal.availabilityStatus && (
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${getStockBadge(deal.availabilityStatus).color}`}>
+                              {getStockBadge(deal.availabilityStatus).label}
+                            </span>
+                          )}
+                          {deal.matchAccuracy !== null && deal.matchAccuracy !== undefined && (
+                            <span className="flex items-center gap-1">
+                              Dopasowanie: 
+                              <span className={`font-bold ${deal.matchAccuracy > 90 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {deal.matchAccuracy}%
+                              </span>
+                            </span>
+                          )}
+                          {deal.priceDifferenceVsTarget !== 0 && (
+                            <span className={`font-mono font-bold ${deal.priceDifferenceVsTarget < 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {deal.priceDifferenceVsTarget < 0
+                                ? `(${Math.abs(deal.priceDifferenceVsTarget)} zł taniej!)`
+                                : `(+${deal.priceDifferenceVsTarget} zł)`}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Total cost breakdown if known */}
+                        {deal.isTotalCostKnown && deal.totalCost !== null && deal.totalCost !== undefined && (
+                          <div className="mt-1 text-[11px] text-emerald-400 font-mono">
+                            Całkowity koszt zakupu: <strong>{deal.totalCost.toLocaleString()} {deal.currency}</strong> (produkt + dostawa)
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Right: Price & Direct Link button */}
+                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
+                        <div className="text-left sm:text-right">
+                          {deal.price !== null && deal.price > 0 ? (
+                            <div className="text-base sm:text-lg font-extrabold font-mono text-white">
+                              {deal.price.toLocaleString()} <span className="text-xs font-normal text-slate-400">{deal.currency}</span>
+                            </div>
+                          ) : (
+                            <div className="text-xs font-semibold text-cyan-300 bg-cyan-950/60 px-2.5 py-1 rounded-md border border-cyan-800/60">
+                              Sprawdź cenę w sklepie
+                            </div>
+                          )}
+                          <span className={`text-[10px] block font-semibold mt-0.5 ${isVerified ? 'text-emerald-400' : 'text-slate-400'}`}>
+                            {isVerified ? '● źródło potwierdzone' : '○ kandydat do weryfikacji'}
+                          </span>
+                        </div>
+
+                        <a
+                          href={deal.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-h-[44px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-700/20 transition active:scale-95"
+                        >
+                          <span>{deal.price && deal.price > 0 ? 'PRZEJDŹ DO OFERTY' : 'SPRAWDŹ OFERTĘ'}</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             {/* DealZ Engine Diagnostics & Data Provenance Panel */}
@@ -541,16 +621,53 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
                 <div className="flex items-center gap-2">
                   <Cpu className="w-4 h-4 text-emerald-400" />
                   <span className="font-bold text-white">DealZ Engine: Diagnostyka i Pochodzenie Danych (Data Provenance)</span>
-                  <span className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-emerald-950 border border-emerald-800 text-emerald-300">
-                    Aktywne 14 modułów
-                  </span>
+                  {result.dealzRanking?.diagnostics?.providers && (
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-emerald-950 border border-emerald-800 text-emerald-300">
+                      {result.dealzRanking.diagnostics.providers.filter(p => p.isConfigured).length} z {result.dealzRanking.diagnostics.providers.length} źródeł API aktywnych
+                    </span>
+                  )}
                 </div>
                 {showDiagnostics ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
               </button>
 
               {showDiagnostics && (
                 <div className="mt-2.5 p-4 rounded-xl bg-slate-950 border border-slate-800/90 text-xs space-y-3 font-sans">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Providers Table from ProviderRegistry */}
+                  {result.dealzRanking?.diagnostics?.providers && result.dealzRanking.diagnostics.providers.length > 0 && (
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold block mb-2">
+                        Status Adapterów Źródeł (ProviderRegistry):
+                      </span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {result.dealzRanking.diagnostics.providers.map((p, idx) => (
+                          <div key={idx} className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-white">{p.name}</span>
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${
+                                p.isConfigured 
+                                  ? 'bg-emerald-950/80 border-emerald-800 text-emerald-300' 
+                                  : 'bg-slate-800 border-slate-700 text-slate-400'
+                              }`}>
+                                {p.isConfigured ? 'Aktywny (zapytanie wykonane)' : 'Wyszukiwanie przez źródła pośrednie'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                              <span>Czas: {p.latencyMs ?? 0} ms</span>
+                              <span>Pobrane: {p.crawledCount} | Zweryfikowane: {p.verifiedCount} | Odrzucone: {p.rejectedCount}</span>
+                            </div>
+                            {p.health.lastError && (
+                              <div className="text-[10px] text-rose-400 truncate">
+                                Błąd: {p.health.lastError}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Breakdown & Identity */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
                     {/* Left: Product Identity Resolver */}
                     <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 space-y-1.5">
                       <div className="flex items-center gap-1.5 text-slate-200 font-bold">
@@ -565,22 +682,32 @@ export const ExpressDealFinder: React.FC<ExpressDealFinderProps> = ({
                         {result.dealzRanking?.recognizedProduct.model && (
                           <div>Model: <strong className="text-emerald-300">{result.dealzRanking.recognizedProduct.model}</strong></div>
                         )}
-                        <div>Pewność dopasowania AI: <strong className="text-white">{result.confidenceScore}%</strong></div>
+                        <div>Pewność dopasowania AI: <strong className="text-white">{result.confidenceScore !== null ? `${result.confidenceScore}%` : 'Brak danych'}</strong></div>
                       </div>
                     </div>
 
-                    {/* Right: Sources & Orchestration */}
+                    {/* Right: Offer Verification Breakdown */}
                     <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 space-y-1.5">
                       <div className="flex items-center gap-1.5 text-slate-200 font-bold">
                         <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Search Orchestrator & Weryfikacja Ofert</span>
+                        <span>Offer Verification Engine (Statystyki Kandydatów)</span>
                       </div>
-                      <div className="text-[11px] text-slate-400 space-y-1">
-                        <div>Przeszukane źródła: <strong className="text-white">Allegro, OLX, Ceneo, Amazon.pl</strong></div>
-                        <div>Aktywne oferty rynkowe: <strong className="text-white">{result.similarDeals.length}</strong></div>
-                        <div>Kalkulacja kosztu: <strong className="text-emerald-300">Cena + Koszt wysyłki (bez fikcyjnych zer)</strong></div>
-                        <div>Wykrywanie duplikatów: <strong className="text-emerald-300">Aktywne (kanonizacja URL)</strong></div>
-                      </div>
+                      {result.dealzRanking?.diagnostics ? (
+                        <div className="text-[11px] text-slate-400 space-y-1">
+                          <div>Kandydaci ogółem: <strong className="text-white">{result.dealzRanking.diagnostics.totalCandidates}</strong></div>
+                          <div>Z odczytaną ceną: <strong className="text-emerald-300">{result.dealzRanking.diagnostics.offersWithPrice}</strong></div>
+                          <div>Zgodny wariant: <strong className="text-emerald-300">{result.dealzRanking.diagnostics.offersWithConfirmedVariant}</strong></div>
+                          <div>W pełni zweryfikowane: <strong className="text-emerald-300">{result.dealzRanking.diagnostics.fullyVerifiedCount}</strong></div>
+                          <div>Częściowa weryfikacja: <strong className="text-amber-300">{result.dealzRanking.diagnostics.partiallyVerifiedCount}</strong></div>
+                          <div>Odrzucone kandydatury: <strong className="text-rose-400">{result.dealzRanking.diagnostics.rejectedCount}</strong></div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-400 space-y-1">
+                          <div>Aktywne oferty rynkowe: <strong className="text-white">{result.similarDeals.length}</strong></div>
+                          <div>Kalkulacja kosztu: <strong className="text-emerald-300">Cena + Koszt wysyłki (bez fikcyjnych zer)</strong></div>
+                          <div>Wykrywanie duplikatów: <strong className="text-emerald-300">Aktywne (kanonizacja URL)</strong></div>
+                        </div>
+                      )}
                     </div>
                   </div>
 

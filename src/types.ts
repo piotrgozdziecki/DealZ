@@ -145,27 +145,33 @@ export interface HistoryItem {
 
 export interface SimilarDealItem {
   title: string;
-  platform: 'Allegro' | 'OLX' | 'Ceneo' | 'Amazon';
-  price: number;
+  platform: 'Allegro' | 'OLX' | 'Ceneo' | 'Amazon' | string;
+  price: number | null;
+  productPrice?: number | null;
   currency: string;
   condition: string;
   url: string;
   shipping: string;
+  shippingCost?: number | null;
+  totalCost?: number | null;
+  isTotalCostKnown?: boolean;
   isCheaper: boolean;
   priceDifferenceVsTarget: number;
-  matchAccuracy: number; // 0-100% how well this specific item matches the core product
-  isCoreProduct: boolean; // false if it's an accessory or related part
+  matchAccuracy: number | null;
+  isCoreProduct: boolean;
   availabilityStatus: 'in_stock' | 'out_of_stock' | 'unknown' | 'low_stock';
-  shippingSpeed?: string; // e.g. "Dostawa jutro"
+  shippingSpeed?: string | null;
   badge?: string;
   seller?: string;
+  verificationStatus?: string;
+  verificationEvidence?: string[];
 }
 
 export interface InstantDealResult {
   query: string;
   targetProduct: {
     title: string;
-    identifiedPrice: number;
+    identifiedPrice: number | null;
     currency: string;
   };
   verdict: 'BIERZ TERAZ' | 'NEGOCJUJ' | 'SZUKAJ DALEJ';
@@ -173,10 +179,10 @@ export interface InstantDealResult {
   savingsAmount: number;
   savingsPercentage: number;
   isProfitable: boolean;
-  benchmarkPrice: number;
+  benchmarkPrice: number | null;
   similarDeals: SimilarDealItem[];
   safetyTip: string;
-  confidenceScore: number; // Score from 0 to 100 representing how well the results match the intent
+  confidenceScore: number | null;
   exactLiveLinks?: {
     allegro: string;
     olx: string;
@@ -186,13 +192,15 @@ export interface InstantDealResult {
   groundingSources?: WebSource[];
   rawMarketStats?: {
     totalActiveOffers: number;
-    medianPrice: number;
-    minPrice: number;
-    maxPrice: number;
+    medianPrice: number | null;
+    minPrice: number | null;
+    maxPrice: number | null;
     priceStandardDeviation?: number;
     lastPriceChange?: string;
   };
   dealzRanking?: import('./types/dealz').DealzRankingResult;
+  marketplaceSearchLinks?: import('./types/dealz').MarketplaceSearchLink[];
 }
+
 
 

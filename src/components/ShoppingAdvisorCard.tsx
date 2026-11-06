@@ -62,7 +62,7 @@ export const ShoppingAdvisorCard: React.FC<ShoppingAdvisorCardProps> = ({
             <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
               Asystent Zakupowy & Wyszukiwarka Alternatyw
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-950 border border-purple-800 text-purple-300">
-                gemini-3.8-flash + Search
+                Gemini AI + Google Search Grounding
               </span>
             </h3>
             <p className="text-xs text-slate-400">

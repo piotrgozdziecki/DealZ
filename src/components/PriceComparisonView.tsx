@@ -127,21 +127,21 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
         <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
           <span className="text-slate-400 block text-[11px]">Najniższa cena (Lider):</span>
           <span className="text-emerald-400 font-mono font-extrabold text-base sm:text-lg">
-            {data.bestPrice.toLocaleString()} PLN
+            {data.bestPrice ? `${data.bestPrice.toLocaleString()} PLN` : 'Weryfikacja...'}
           </span>
         </div>
 
         <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
           <span className="text-slate-400 block text-[11px]">Średnia na rynku:</span>
           <span className="text-slate-200 font-mono font-bold text-base sm:text-lg">
-            {data.averagePrice.toLocaleString()} PLN
+            {data.averagePrice ? `${data.averagePrice.toLocaleString()} PLN` : 'Weryfikacja...'}
           </span>
         </div>
 
         <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
           <span className="text-slate-400 block text-[11px]">Najdroższy sklep:</span>
           <span className="text-slate-400 font-mono font-bold text-base sm:text-lg">
-            {data.worstPrice.toLocaleString()} PLN
+            {data.worstPrice ? `${data.worstPrice.toLocaleString()} PLN` : 'Weryfikacja...'}
           </span>
         </div>
 
@@ -149,10 +149,11 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
           <span className="text-slate-400 block text-[11px]">Maksymalna oszczędność:</span>
           <span className="text-cyan-400 font-mono font-extrabold text-base sm:text-lg flex items-center gap-1">
             <TrendingDown className="w-4 h-4" />
-            do {data.savingsVsHighest.toLocaleString()} PLN
+            {data.savingsVsHighest ? `do ${data.savingsVsHighest.toLocaleString()} PLN` : 'Wg ofert'}
           </span>
         </div>
       </div>
+
 
       {/* D3.js 30-Day Historical Price Trend Line Chart */}
       <PriceHistoryChart
@@ -295,13 +296,15 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
               <div className="flex items-baseline justify-between mt-3">
                 <div>
                   <div className="text-lg font-extrabold font-mono text-white">
-                    {store.price.toLocaleString()} <span className="text-xs font-normal text-slate-400">{store.currency}</span>
+                    {store.price ? `${store.price.toLocaleString()} ` : 'Sprawdź u sprzedawcy '}
+                    {store.price ? <span className="text-xs font-normal text-slate-400">{store.currency}</span> : null}
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
                     <Truck className="w-3 h-3 text-slate-500" />
                     <span>{store.shipping}</span>
                   </div>
                 </div>
+
 
                 <a
                   href={store.url}
@@ -361,7 +364,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                   </td>
                   <td className="py-3.5 px-4 text-slate-400">{store.availability || 'Dostępne'}</td>
                   <td className="py-3.5 px-4 text-right font-mono font-bold text-sm text-white">
-                    {store.price.toLocaleString()} {store.currency}
+                    {store.price ? `${store.price.toLocaleString()} ${store.currency}` : 'Wg oferty'}
                   </td>
                   <td className="py-3.5 px-4 text-right">
                     <a
