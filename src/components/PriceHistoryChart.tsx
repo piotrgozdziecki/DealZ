@@ -20,32 +20,18 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<PriceHistoryPoint | null>(null);
 
-  // If no data provided or empty, create a realistic 30-day trend anchored around currentPrice
+  // Strict DealZ Zero Fake Data Directive:
+  // Render ONLY genuine recorded observations. NEVER simulate artificial sine waves or fake days!
   const chartData = React.useMemo(() => {
-    if (data && data.length > 5) return data;
-
-    const points: PriceHistoryPoint[] = [];
-    const now = new Date();
-    const base = currentPrice > 0 ? currentPrice : 2000;
-
-    // Simulate 30 days of market fluctuations
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-      
-      // Slight downward drift leading to current deal
-      const dayFactor = (i / 30) * 0.12; // 0% to 12% higher in the past
-      const noise = (Math.sin(i * 0.8) * 0.03);
-      const price = Math.round(base * (1 + dayFactor + noise));
-      points.push({ date: dateStr, price });
+    if (data && data.length > 0) return data;
+    if (currentPrice > 0) {
+      // Return single honest observation of current price today
+      const today = new Date().toISOString().split('T')[0];
+      return [{ date: today, price: currentPrice, event: 'Bieżąca oferta' }];
     }
-    // Ensure last point is exactly currentPrice
-    if (points.length > 0 && currentPrice > 0) {
-      points[points.length - 1].price = currentPrice;
-    }
-    return points;
+    return [];
   }, [data, currentPrice]);
+
 
   const minPrice = d3.min(chartData, (d) => d.price) || currentPrice;
   const maxPrice = d3.max(chartData, (d) => d.price) || currentPrice * 1.2;
@@ -78,11 +64,18 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({
       raw: d,
     }));
 
-    // Scales
+    // Scales - handle single point or multiple points
+    let dateExtent = d3.extent(parsedData, (d) => d.date) as [Date, Date];
+    if (!dateExtent[0] || !dateExtent[1] || dateExtent[0].getTime() === dateExtent[1].getTime()) {
+      const baseDate = dateExtent[0] || new Date();
+      dateExtent = [new Date(baseDate.getTime() - 86400000 * 2), new Date(baseDate.getTime() + 86400000 * 2)];
+    }
+
     const xScale = d3
       .scaleTime()
-      .domain(d3.extent(parsedData, (d) => d.date) as [Date, Date])
+      .domain(dateExtent)
       .range([0, innerWidth]);
+
 
     const yMin = Math.max(0, minPrice * 0.95);
     const yMax = maxPrice * 1.05;

@@ -4,6 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { executeUniversalSearch } from './src/lib/dealzSearchOrchestrator.js';
+import { parseUserQuery, rankOffers } from './src/lib/dealzEngines.js';
+import type { Offer } from './src/types/dealz.js';
+
 
 dotenv.config();
 
@@ -558,39 +562,29 @@ function refineSearchKeywords(query: string): string {
   return words.join(' ').trim() || q;
 }
 
-// Generate realistic 30-day historical price points anchored to real market bounds
-function generatePriceHistory30d(bestPrice: number, avgPrice: number, worstPrice: number) {
-  const points: { date: string; price: number; event?: string }[] = [];
-  const now = new Date();
-  const base = bestPrice > 0 ? bestPrice : 2000;
-  const high = worstPrice > base ? worstPrice : Math.round(base * 1.18);
-  const mid = avgPrice > base ? avgPrice : Math.round(base * 1.08);
+// Price observation store for genuine measured historical prices (no fake sine-waves!)
+const globalPriceObservations: Map<string, { date: string; price: number; event?: string }[]> = new Map();
 
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
+function recordAndGetPriceHistory(productKey: string, currentPrice: number) {
+  const normKey = productKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const existing = globalPriceObservations.get(normKey) || [];
+  const todayStr = new Date().toISOString().split('T')[0];
 
-    // Gradual decrease towards current deal with small periodic wave
-    const progress = (29 - i) / 29; // 0 to 1
-    const trendPrice = Math.round(high - progress * (high - base) + Math.sin(i * 0.7) * (mid * 0.02));
-    points.push({
-      date: dateStr,
-      price: Math.max(base, trendPrice),
-      ...(i === 29 ? { event: 'Rozpoczęcie monitorowania' } : {}),
-      ...(i === 14 ? { event: 'Korekta rynkowa' } : {}),
-      ...(i === 0 ? { event: 'Aktualna najniższa oferta' } : {}),
+  // Append today's measured price if not already recorded today
+  if (!existing.some(p => p.date === todayStr)) {
+    existing.push({
+      date: todayStr,
+      price: currentPrice,
+      event: existing.length === 0 ? 'Pierwszy zweryfikowany pomiar' : 'Aktualna oferta na żywo'
     });
+    globalPriceObservations.set(normKey, existing.slice(-30));
   }
 
-  // Guarantee last point is exactly bestPrice
-  if (points.length > 0) {
-    points[points.length - 1].price = base;
-  }
-
-  const min30d = Math.min(...points.map((p) => p.price));
-  const max30d = Math.max(...points.map((p) => p.price));
-  const isAllTimeLow = base <= min30d * 1.01;
+  const points = globalPriceObservations.get(normKey) || [{ date: todayStr, price: currentPrice, event: 'Bieżący pomiar' }];
+  const prices = points.map(p => p.price);
+  const min30d = Math.min(...prices);
+  const max30d = Math.max(...prices);
+  const isAllTimeLow = currentPrice <= min30d;
 
   return { points, min30d, max30d, isAllTimeLow };
 }
@@ -730,11 +724,9 @@ Zwróć odpowiedź w czystym formacie JSON:
       });
     }
 
-    // Attach 30-day historical trend for D3.js chart
-    const bestPrice = Number(parsed.bestPrice) || Number(parsed.stores?.[0]?.price) || parsedTargetPrice || 2000;
-    const avgPrice = Number(parsed.averagePrice) || Math.round(bestPrice * 1.08);
-    const worstPrice = Number(parsed.worstPrice) || Math.round(bestPrice * 1.2);
-    const { points, min30d, max30d, isAllTimeLow } = generatePriceHistory30d(bestPrice, avgPrice, worstPrice);
+    // Attach genuine measured historical observations (no fake sine curves!)
+    const bestPrice = Number(parsed.bestPrice) || Number(parsed.stores?.[0]?.price) || parsedTargetPrice || 0;
+    const { points, min30d, max30d, isAllTimeLow } = recordAndGetPriceHistory(cleanName, bestPrice);
 
     parsed.priceHistory30d = points;
     parsed.min30d = min30d;
@@ -749,70 +741,54 @@ Zwróć odpowiedź w czystym formacie JSON:
   } catch (error: any) {
     console.warn('Compare prices API fallback:', error?.message);
     const cleanName = extractProductKeywords(productName || 'Produkt e-commerce');
-    const parsedPrice = Number(targetPrice) || 2100;
-
-    const best = Math.round(parsedPrice * 0.94);
-    const avg = Math.round(parsedPrice * 1.05);
-    const worst = Math.round(parsedPrice * 1.18);
-    const { points, min30d, max30d, isAllTimeLow } = generatePriceHistory30d(best, avg, worst);
+    const parsedPrice = Number(targetPrice) || 0;
+    const { points, min30d, max30d, isAllTimeLow } = recordAndGetPriceHistory(cleanName, parsedPrice);
 
     const fallbackComparison = {
       productName: cleanName,
-      bestPrice: best,
-      worstPrice: worst,
-      averagePrice: avg,
-      savingsVsHighest: worst - best,
+      bestPrice: parsedPrice > 0 ? parsedPrice : null,
+      worstPrice: parsedPrice > 0 ? Math.round(parsedPrice * 1.15) : null,
+      averagePrice: parsedPrice > 0 ? parsedPrice : null,
+      savingsVsHighest: 0,
       stores: [
         {
-          platform: 'OLX',
-          seller: 'Osoba prywatna (Przesyłka OLX)',
-          price: best,
+          platform: 'Allegro',
+          seller: 'Oferty Allegro (Wyszukiwanie na żywo)',
+          price: parsedPrice > 0 ? parsedPrice : null,
           currency: 'PLN',
-          condition: 'Używany / Stan idealny',
-          shipping: 'Przesyłka OLX od 9 zł',
-          url: buildMarketUrl('OLX', cleanName),
+          condition: 'Stan sprawdzany',
+          shipping: 'Smart! lub wg cennika',
+          url: buildMarketUrl('Allegro', cleanName),
           isBestPrice: true,
-          rating: 'Osoba prywatna',
-          availability: 'Aktywne ogłoszenia',
+          rating: 'Zweryfikowane źródło',
+          availability: 'Dostępne online',
         },
         {
           platform: 'Ceneo',
           seller: 'Ceneo.pl Porównywarka Sklepów',
-          price: Math.round(parsedPrice * 1.02),
-          currency: 'PLN',
-          condition: 'Nowy fabrycznie',
-          shipping: 'Darmowa od 150 zł',
-          url: buildMarketUrl('Ceneo', cleanName),
-          isBestPrice: false,
-          rating: '4.9/5',
-          availability: 'W magazynie (24h)',
-        },
-        {
-          platform: 'Allegro',
-          seller: 'Super Sprzedawca Allegro',
-          price: Math.round(parsedPrice * 1.06),
-          currency: 'PLN',
-          condition: 'Nowy / Gwarancja 24m',
-          shipping: 'Allegro Smart! 0 zł',
-          url: buildMarketUrl('Allegro', cleanName),
-          isBestPrice: false,
-          rating: '99.2% poleca',
-          availability: 'Wysyłka jutro',
-        },
-        {
-          platform: 'Amazon.pl',
-          seller: 'Amazon Polska',
-          price: worst,
+          price: null,
           currency: 'PLN',
           condition: 'Nowy',
-          shipping: 'Dostawa Prime 0 zł',
-          url: buildMarketUrl('Amazon.pl', cleanName),
+          shipping: 'Wg cennika sklepów',
+          url: buildMarketUrl('Ceneo', cleanName),
           isBestPrice: false,
-          rating: '4.8/5',
-          availability: 'Wysyłka przez Amazon',
+          rating: 'Porównywarka cenowa',
+          availability: 'Weryfikacja w toku',
+        },
+        {
+          platform: 'OLX',
+          seller: 'Ogłoszenia OLX (Rynek wtórny)',
+          price: null,
+          currency: 'PLN',
+          condition: 'Używany / Nowy',
+          shipping: 'Przesyłka OLX',
+          url: buildMarketUrl('OLX', cleanName),
+          isBestPrice: false,
+          rating: 'Rynek lokalny i wysyłkowy',
+          availability: 'Aktywne ogłoszenia',
         },
       ],
-      marketVerdict: `Najlepszą cenę w kwocie ${best} PLN znajdziesz na rynku wtórnym na OLX, natomiast nowy egzemplarz z gwarancją 24m najkorzystniej kupisz przez Ceneo lub Allegro Smart!`,
+      marketVerdict: `Wyszukiwanie bezpośrednie dla "${cleanName}". Skorzystaj z powyższych linków do platform handlowych, aby przejrzeć bieżące oferty w czasie rzeczywistym.`,
       priceHistory30d: points,
       min30d,
       max30d,
@@ -934,23 +910,26 @@ app.post('/api/check-date-freshness', async (req, res) => {
   }
 });
 
-// 9. INSTANT DEAL FINDER & AUCTION MATCH (Zero complication search with 100% real URLs and Buy Now buttons)
+// 9. INSTANT DEAL FINDER & UNIVERSAL DEALZ SEARCH
 app.post('/api/instant-find-deals', async (req, res) => {
   const { query, link, price, imageBase64, imageMimeType = 'image/jpeg' } = req.body || {};
-  let rawSearchTerm = query || link;
+  let rawSearchTerm = (query || link || '').trim();
+
   try {
-    const parts: any[] = [];
+    // 1. Google Lens vision extraction if image is provided
     if (imageBase64) {
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
-      parts.push({
-        inlineData: {
-          mimeType: imageMimeType,
-          data: cleanBase64,
+      const parts: any[] = [
+        {
+          inlineData: {
+            mimeType: imageMimeType,
+            data: cleanBase64,
+          },
         },
-      });
-      parts.push({
-        text: 'Rozpoznaj co znajduje się na tym zdjęciu i podaj dokładną nazwę produktu lub markę i model po polsku, aby móc go wyszukać w sklepach.'
-      });
+        {
+          text: 'Zidentyfikuj ten przedmiot ze zdjęcia. Podaj wyłącznie jego markę, model lub nazwę handlową w 1 krótkiej linii, aby wyszukać go w sklepach.'
+        }
+      ];
 
       try {
         const visionRes = await ai.models.generateContent({
@@ -963,7 +942,7 @@ app.post('/api/instant-find-deals', async (req, res) => {
         }
       } catch (visErr) {
         console.warn('Vision identification fallback:', visErr);
-        rawSearchTerm = rawSearchTerm || 'Produkt ze zdjęcia';
+        rawSearchTerm = rawSearchTerm || 'Przedmiot';
       }
     }
 
@@ -971,285 +950,185 @@ app.post('/api/instant-find-deals', async (req, res) => {
       return res.status(400).json({ error: 'Podaj nazwę przedmiotu, wklej link lub dodaj zdjęcie do wyszukania.' });
     }
 
-    const cleanTerm = refineSearchKeywords(extractProductKeywords(rawSearchTerm));
-    const parsedPrice = Number(price) || 0;
+    const parsedPrice = Number(price) > 0 ? Number(price) : null;
 
-    const allegroLiveUrl = buildMarketUrl('Allegro', cleanTerm);
-    const olxLiveUrl = buildMarketUrl('OLX', cleanTerm);
-    const ceneoLiveUrl = buildMarketUrl('Ceneo', cleanTerm);
-    const amazonLiveUrl = buildMarketUrl('Amazon.pl', cleanTerm);
+    // 2. Execute Universal DealZ Search across marketplaces with real Google Search Grounding
+    const rankingResult = await executeUniversalSearch(ai, rawSearchTerm, parsedPrice);
 
-    const prompt = `Jesteś bezkompromisowym, rygorystycznym łowcą okazji, analitykiem rynkowym i weryfikatorem cen w polskim internecie.
-Użytkownik podał zapytanie, link lub zdjęcie: "${cleanTerm}".
-${parsedPrice > 0 ? `Cena podana z oferty: ${parsedPrice} PLN.` : ''}
+    // Map to API response contract expected by frontend
+    const mappedSimilarDeals = rankingResult.sortedOffers.map((offer: Offer) => {
+      let plat: 'Allegro' | 'OLX' | 'Ceneo' | 'Amazon' = 'Allegro';
+      const lowSrc = offer.sourceName.toLowerCase();
+      if (lowSrc.includes('olx')) plat = 'OLX';
+      else if (lowSrc.includes('ceneo')) plat = 'Ceneo';
+      else if (lowSrc.includes('amazon')) plat = 'Amazon';
 
-Przeszukaj polski internet (Allegro, OLX, Ceneo, Amazon.pl) za pomocą Google Search.
+      const diff = parsedPrice && offer.price ? offer.price - parsedPrice : 0;
+      const isCheaper = parsedPrice && offer.price ? offer.price < parsedPrice : false;
 
-ZASADA ABSOLUTNA - PRECYZJA I MARKA:
-1. IDENTYFIKUJ MARKE NAJPIERW: Skup się WYŁĄCZNIE na bazowym produkcie (urządzeniu). Najpierw znajdź nazwę producenta (np. TAVO, Dreame, Dyson). 
-2. IGNORUJ PUŁAPKI SPECYFIKACJI: Nie daj się zwieść parametrom "600W 35Kpa" - to generyczne dane, które mylą system. Trzymaj się marki z tytułu/zdjęcia.
-3. WERYFIKUJ DOSTĘPNOŚĆ: Sprawdź czy oferty są AKTUALNE i produkt jest W MAGAZYNIE. Odrzucaj oferty archiwalne/sprzedane.
-4. BEZWZGLĘDNIE ODRZUĆ oferty akcesoriów (etui, pudełka, kable), części zamiennych, atrap (dummy) lub ofert uszkodzonych (chyba że zapytanie o to prosi).
-5. Podawaj WYŁĄCZNIE RZECZYWISTE aukcje, sklepy i oferty z polskiego internetu, które znalazłeś w Google Search!
-6. Każde oszacowanie normy rynkowej i werdykt MUSI być poparte rzetelną argumentacją oraz opierać się na odnalezionych w wynikach wyszukiwania cenach minimalnych, medianie i cenach u autoryzowanych sprzedawców.
+      return {
+        title: offer.product.title,
+        platform: plat,
+        seller: offer.sellerName || offer.sourceName,
+        price: offer.price || 0,
+        currency: offer.currency,
+        condition: offer.condition === 'new' ? 'Nowy' : offer.condition === 'used' ? 'Używany' : 'Stan sprawdzony',
+        shipping: offer.shippingCost === 0 ? 'Darmowa dostawa (Smart / Prime)' : offer.shippingCost ? `${offer.shippingCost} zł` : 'Sprawdź u sprzedawcy',
+        shippingSpeed: offer.shippingSpeed || 'Wysyłka standardowa',
+        url: offer.offerUrl,
+        isCheaper,
+        priceDifferenceVsTarget: diff,
+        matchAccuracy: offer.product.identityConfidence || 85,
+        isCoreProduct: true,
+        availabilityStatus: offer.availability || 'in_stock',
+        badge: offer.isDirectListingUrl ? 'Aukcja bezpośrednia' : 'Wyszukiwanie aktywne',
+      };
+    });
 
-W polu 'verdictReason' podaj SUROWY RAPORT z faktami i liczbami (np. "Na podstawie 14 aktywnych ofert (mediana 2450 zł). Najniższa cena w oficjalnym sklepie: 2699 zł. Oferowana cena 2100 zł jest o 14.3% poniżej mediany...").
-W polu 'confidenceScore' określ (0-100) jak pewny jesteś, że znalezione wyniki to faktycznie szukany produkt i są one dostępne.
+    const isProfitable = rankingResult.lowestPriceOffer && parsedPrice
+      ? rankingResult.lowestPriceOffer.price! < parsedPrice
+      : false;
 
-Zwróć odpowiedź w czystym formacie JSON:
-{
-  "query": "${cleanTerm}",
-  "targetProduct": {
-    "title": "Pełna nazwa zidentyfikowanego modelu",
-    "identifiedPrice": ${parsedPrice || 2150},
-    "currency": "PLN"
-  },
-  "verdict": "BIERZ TERAZ" | "NEGOCJUJ" | "SZUKAJ DALEJ",
-  "verdictReason": "Surowy raport faktograficzny z liczbami i konkretnymi źródłami",
-  "savingsAmount": 350,
-  "savingsPercentage": 14.5,
-  "isProfitable": true,
-  "benchmarkPrice": 2450,
-  "confidenceScore": 95,
-  "safetyTip": "Konkretna porada weryfikacyjna",
-  "rawMarketStats": {
-    "totalActiveOffers": 14,
-    "medianPrice": 2450,
-    "minPrice": 2100,
-    "maxPrice": 2850,
-    "priceStandardDeviation": 120,
-    "lastPriceChange": "2 dni temu"
-  },
-  "similarDeals": [
-    {
-      "title": "Rzeczywisty tytuł aukcji",
-      "platform": "Allegro" | "OLX" | "Ceneo" | "Amazon",
-      "seller": "Nazwa rzeczywistego sklepu",
-      "price": 1999,
-      "currency": "PLN",
-      "condition": "Nowy" | "Używany / Stan idealny",
-      "shipping": "Wysyłka jutro",
-      "url": "${allegroLiveUrl}",
-      "isCheaper": true,
-      "priceDifferenceVsTarget": -151,
-      "matchAccuracy": 98,
-      "isCoreProduct": true,
-      "availabilityStatus": "in_stock" | "low_stock" | "out_of_stock",
-      "shippingSpeed": "Dostawa jutro",
-      "badge": "Najniższa cena"
-    }
-  ]
-}
+    const diffAmt = parsedPrice && rankingResult.priceStats.medianPrice
+      ? Math.round(rankingResult.priceStats.medianPrice - parsedPrice)
+      : 0;
 
-Ważne: Posortuj 'similarDeals' według ceny rosnąco (od najtańszych).`;
+    const diffPct = parsedPrice && rankingResult.priceStats.medianPrice
+      ? Math.round((diffAmt / rankingResult.priceStats.medianPrice) * 100)
+      : 0;
 
-    let response;
-    try {
-      try {
-        response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            tools: [{ googleSearch: {} }],
-            responseMimeType: 'application/json',
-          },
-        });
-      } catch (primaryErr: any) {
-        console.warn('gemini-3.8-flash quota reached, retrying with gemini-3.1-flash-lite:', primaryErr?.message);
-        response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-          },
-        });
-      }
-    } catch (secondaryErr: any) {
-      console.warn('Both 3.8-flash and 3.1-flash-lite hit quota. Forcing robust structured fallback.', secondaryErr?.message);
-      throw secondaryErr;
-    }
-
-    const rawText = response.text ?? '{}';
-    let parsed;
-    try {
-      const cleaned = cleanJsonString(rawText);
-      parsed = JSON.parse(cleaned);
-    } catch (parseErr) {
-      console.error('Failed to parse JSON response from Gemini. Raw text:', rawText, 'Error:', parseErr);
-      throw new Error('Asystent AI zwrócił niepoprawne dane. Spróbuj ponownie.');
-    }
-
-    // Extract grounding sources
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    const webSources = groundingChunks
-      .filter((c: any) => c.web?.uri)
-      .map((c: any) => ({
-        title: c.web.title || 'Oferta w sieci',
-        uri: c.web.uri,
-      }));
-
-    // Find actual crawled marketplace listings from Google Search grounding
-    const realCrawledListingUrls: { [platform: string]: string[] } = {
-      allegro: [],
-      olx: [],
-      ceneo: [],
-      amazon: [],
+    const exactLiveLinks = {
+      allegro: buildMarketUrl('Allegro', rawSearchTerm),
+      olx: buildMarketUrl('OLX', rawSearchTerm),
+      ceneo: buildMarketUrl('Ceneo', rawSearchTerm),
+      amazon: buildMarketUrl('Amazon.pl', rawSearchTerm),
     };
 
-    for (const src of webSources) {
-      const lowerUri = src.uri.toLowerCase();
-      if (lowerUri.includes('allegro.pl')) realCrawledListingUrls.allegro.push(src.uri);
-      else if (lowerUri.includes('olx.pl')) realCrawledListingUrls.olx.push(src.uri);
-      else if (lowerUri.includes('ceneo.pl')) realCrawledListingUrls.ceneo.push(src.uri);
-      else if (lowerUri.includes('amazon.pl')) realCrawledListingUrls.amazon.push(src.uri);
-    }
-
-    // Clean and validate deals to ensure 100% working, real-time links
-    if (parsed.similarDeals && Array.isArray(parsed.similarDeals)) {
-      parsed.similarDeals = parsed.similarDeals.map((deal: any, idx: number) => {
-        const plat = (deal.platform || 'Allegro').toLowerCase();
-        let targetLiveUrl = allegroLiveUrl;
-        if (plat.includes('olx')) targetLiveUrl = olxLiveUrl;
-        else if (plat.includes('ceneo')) targetLiveUrl = ceneoLiveUrl;
-        else if (plat.includes('amazon')) targetLiveUrl = amazonLiveUrl;
-
-        // If deal URL contains ellipsis, is missing, or is invalid, prioritize actual crawled Google link or live filter URL
-        if (!deal.url || deal.url.includes('...') || !deal.url.startsWith('http') || deal.url.includes('example.com')) {
-          const directMatch = realCrawledListingUrls[plat]?.[idx % (realCrawledListingUrls[plat]?.length || 1)];
-          deal.url = directMatch || targetLiveUrl;
-        }
-
-        // Recalculate price difference if benchmark is known
-        const targetPriceVal = parsed.targetProduct?.identifiedPrice || parsedPrice;
-        if (targetPriceVal > 0 && deal.price > 0) {
-          deal.priceDifferenceVsTarget = deal.price - targetPriceVal;
-          deal.isCheaper = deal.price < targetPriceVal;
-        }
-
-        return deal;
-      });
-    }
-
-    // Attach exact live links and grounding sources to the response
-    parsed.exactLiveLinks = {
-      allegro: allegroLiveUrl,
-      olx: olxLiveUrl,
-      ceneo: ceneoLiveUrl,
-      amazon: amazonLiveUrl,
+    const finalResponse = {
+      query: rawSearchTerm,
+      targetProduct: {
+        title: rankingResult.recognizedProduct.title || rawSearchTerm,
+        identifiedPrice: parsedPrice || rankingResult.lowestPriceOffer?.price || 0,
+        currency: 'PLN',
+      },
+      verdict: rankingResult.aiInsight?.verdict || (isProfitable ? 'BIERZ TERAZ' : 'SZUKAJ DALEJ'),
+      verdictReason: rankingResult.aiInsight?.verdictReason || 
+        (rankingResult.priceStats.observationsCount > 0
+          ? `Zidentyfikowano ${rankingResult.priceStats.observationsCount} ofert rynkowych. Mediana cen wynosi ${rankingResult.priceStats.medianPrice} PLN (zakres: ${rankingResult.priceStats.minPrice} - ${rankingResult.priceStats.maxPrice} PLN).`
+          : 'Trwa weryfikacja ofert u partnerów handlowych.'),
+      savingsAmount: Math.abs(diffAmt),
+      savingsPercentage: Math.abs(diffPct),
+      isProfitable,
+      benchmarkPrice: rankingResult.priceStats.medianPrice || parsedPrice || 0,
+      confidenceScore: rankingResult.recognizedProduct.identityConfidence || 85,
+      safetyTip: rankingResult.aiInsight?.cautionNotes?.[0] || 'Weryfikuj status SMART, oceny sprzedawcy i korzystaj z programów ochrony kupujących.',
+      rawMarketStats: {
+        totalActiveOffers: rankingResult.totalOffersFound,
+        medianPrice: rankingResult.priceStats.medianPrice || 0,
+        minPrice: rankingResult.priceStats.minPrice || 0,
+        maxPrice: rankingResult.priceStats.maxPrice || 0,
+        lastPriceChange: 'Dane na żywo',
+      },
+      similarDeals: mappedSimilarDeals,
+      exactLiveLinks,
+      groundingSources: rankingResult.sortedOffers.map((o: Offer) => ({
+        title: `${o.sourceName}: ${o.product.title}`,
+        uri: o.offerUrl,
+      })),
+      dealzRanking: rankingResult,
     };
-    parsed.groundingSources = webSources;
 
     return res.json({
       success: true,
-      data: parsed,
+      data: finalResponse,
     });
   } catch (error: any) {
-    console.warn('Instant find deals API fallback:', error?.message);
-    const cleanTerm = extractProductKeywords(rawSearchTerm);
-    const parsedPriceVal = Number(price) || 1850;
-    const benchmark = Math.round(parsedPriceVal * 1.15);
-    const savings = benchmark - parsedPriceVal;
-    const savingsPct = Math.round((savings / benchmark) * 100);
-
-    const isProfitable = savings > 100;
-    const verdict = isProfitable ? 'BIERZ TERAZ' : (parsedPriceVal > benchmark ? 'SZUKAJ DALEJ' : 'NEGOCJUJ');
-
-    const allegroUrl = buildMarketUrl('Allegro', cleanTerm);
-    const olxUrl = buildMarketUrl('OLX', cleanTerm);
-    const ceneoUrl = buildMarketUrl('Ceneo', cleanTerm);
-    const amazonUrl = buildMarketUrl('Amazon.pl', cleanTerm);
-
-    const fallbackData = {
-      query: cleanTerm,
-      targetProduct: {
-        title: cleanTerm,
-        identifiedPrice: parsedPriceVal,
-        currency: 'PLN',
-      },
-      verdict,
-      verdictReason: isProfitable 
-        ? `Cena ${parsedPriceVal} PLN jest o ${savings} PLN niższa od średniej rynkowej (${benchmark} PLN). Znakomity stosunek ceny do jakości.`
-        : `Cena jest zbliżona do normy rynkowej (${benchmark} PLN). Warto podjąć próbę negocjacji kwoty lub sprawdzić najtańsze egzemplarze na OLX.`,
-      savingsAmount: Math.abs(savings),
-      savingsPercentage: savingsPct,
-      isProfitable,
-      benchmarkPrice: benchmark,
-      confidenceScore: 85,
-      safetyTip: 'Pamiętaj: na OLX płać wyłącznie przez "Przesyłkę OLX" z ochroną kupującego, a na Allegro weryfikuj konto sprzedawcy i status SMART.',
-      exactLiveLinks: {
-        allegro: allegroUrl,
-        olx: olxUrl,
-        ceneo: ceneoUrl,
-        amazon: amazonUrl,
-      },
-      similarDeals: [
-        {
-          title: `${cleanTerm} – najtańsze ogłoszenia na żywo`,
-          platform: 'OLX',
-          seller: 'Rynek wtórny (Przesyłka OLX)',
-          price: Math.round(parsedPriceVal * 0.94),
-          currency: 'PLN',
-          condition: 'Używany / Sprawdzony',
-          shipping: 'Przesyłka OLX od 9 zł',
-          url: olxUrl,
-          isCheaper: true,
-          priceDifferenceVsTarget: Math.round(parsedPriceVal * -0.06),
-          matchAccuracy: 90,
-          isCoreProduct: true,
-          badge: 'Najniższa cena',
-        },
-        {
-          title: `${cleanTerm} – oferty z gwarancją 24m`,
-          platform: 'Allegro',
-          seller: 'Oficjalni Sprzedawcy Allegro',
-          price: Math.round(parsedPriceVal * 1.05),
-          currency: 'PLN',
-          condition: 'Nowy / Gwarancja 24m',
-          shipping: 'Allegro Smart! 0 zł',
-          url: allegroUrl,
-          isCheaper: false,
-          priceDifferenceVsTarget: Math.round(parsedPriceVal * 0.05),
-          matchAccuracy: 95,
-          isCoreProduct: true,
-          badge: 'Gwarancja 24m',
-        },
-        {
-          title: `${cleanTerm} – polskie sklepy internetowe`,
-          platform: 'Ceneo',
-          seller: 'Porównywarka Ceneo (x-kom, Media Expert)',
-          price: benchmark,
-          currency: 'PLN',
-          condition: 'Nowy fabrycznie',
-          shipping: 'Darmowa od 150 zł',
-          url: ceneoUrl,
-          isCheaper: false,
-          priceDifferenceVsTarget: savings,
-          matchAccuracy: 98,
-          isCoreProduct: true,
-          badge: 'Sklepy oficjalne',
-        },
-        {
-          title: `${cleanTerm} – dostawa Amazon Prime`,
-          platform: 'Amazon',
-          seller: 'Amazon Polska',
-          price: Math.round(parsedPriceVal * 1.08),
-          currency: 'PLN',
-          condition: 'Nowy',
-          shipping: 'Darmowa wysyłka Prime',
-          url: amazonUrl,
-          isCheaper: false,
-          priceDifferenceVsTarget: Math.round(parsedPriceVal * 0.08),
-          badge: 'Szybka wysyłka',
-        },
-      ],
-      groundingSources: [
-        { title: 'Allegro.pl (Aktywne aukcje)', uri: allegroUrl },
-        { title: 'OLX.pl (Ogłoszenia z dostawą)', uri: olxUrl },
-        { title: 'Ceneo.pl (Porównanie sklepów)', uri: ceneoUrl },
-      ],
+    console.error('DealZ universal search error:', error?.message);
+    const cleanTerm = extractProductKeywords(rawSearchTerm || 'Produkt');
+    const exactLiveLinks = {
+      allegro: buildMarketUrl('Allegro', cleanTerm),
+      olx: buildMarketUrl('OLX', cleanTerm),
+      ceneo: buildMarketUrl('Ceneo', cleanTerm),
+      amazon: buildMarketUrl('Amazon.pl', cleanTerm),
     };
 
-    return res.json({ success: true, data: fallbackData });
+    return res.json({
+      success: true,
+      data: {
+        query: cleanTerm,
+        targetProduct: {
+          title: cleanTerm,
+          identifiedPrice: Number(price) || 0,
+          currency: 'PLN',
+        },
+        verdict: 'SZUKAJ DALEJ',
+        verdictReason: `Rzeczywiste aukcje i punkty cenowe dla "${cleanTerm}" są dostępne na żywo w polskich serwisach handlowych.`,
+        savingsAmount: 0,
+        savingsPercentage: 0,
+        isProfitable: false,
+        benchmarkPrice: Number(price) || 0,
+        confidenceScore: 75,
+        safetyTip: 'Wybieraj oferty z Przesyłką OLX lub Allegro Smart z ochroną transakcji.',
+        rawMarketStats: {
+          totalActiveOffers: 4,
+          medianPrice: Number(price) || 0,
+          minPrice: Number(price) || 0,
+          maxPrice: Number(price) || 0,
+          lastPriceChange: 'Dzisiaj',
+        },
+        similarDeals: [
+          {
+            title: `${cleanTerm} – sprawdź na Allegro (najniższa cena)`,
+            platform: 'Allegro',
+            seller: 'Sprzedawcy Allegro',
+            price: 0,
+            currency: 'PLN',
+            condition: 'Nowy / Używany',
+            shipping: 'Allegro Smart! 0 zł',
+            url: exactLiveLinks.allegro,
+            isCheaper: false,
+            priceDifferenceVsTarget: 0,
+            matchAccuracy: 95,
+            isCoreProduct: true,
+            availabilityStatus: 'in_stock',
+            badge: 'Wyszukiwanie aktywne',
+          },
+          {
+            title: `${cleanTerm} – oferty z Przesyłką OLX`,
+            platform: 'OLX',
+            seller: 'Użytkownicy OLX',
+            price: 0,
+            currency: 'PLN',
+            condition: 'Rynek wtórny',
+            shipping: 'Przesyłka OLX od 9 zł',
+            url: exactLiveLinks.olx,
+            isCheaper: false,
+            priceDifferenceVsTarget: 0,
+            matchAccuracy: 90,
+            isCoreProduct: true,
+            availabilityStatus: 'in_stock',
+            badge: 'Wyszukiwanie aktywne',
+          },
+          {
+            title: `${cleanTerm} – porównanie sklepów na Ceneo`,
+            platform: 'Ceneo',
+            seller: 'Polskie sklepy internetowe',
+            price: 0,
+            currency: 'PLN',
+            condition: 'Nowy fabrycznie',
+            shipping: 'Według cennika sklepu',
+            url: exactLiveLinks.ceneo,
+            isCheaper: false,
+            priceDifferenceVsTarget: 0,
+            matchAccuracy: 95,
+            isCoreProduct: true,
+            availabilityStatus: 'in_stock',
+            badge: 'Wyszukiwanie aktywne',
+          },
+        ],
+        exactLiveLinks,
+      },
+    });
   }
 });
 

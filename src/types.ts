@@ -192,5 +192,7 @@ export interface InstantDealResult {
     priceStandardDeviation?: number;
     lastPriceChange?: string;
   };
+  dealzRanking?: import('./types/dealz').DealzRankingResult;
 }
+
 
